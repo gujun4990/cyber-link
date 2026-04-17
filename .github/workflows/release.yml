@@ -36,6 +36,20 @@ jobs:
       - name: Build Windows installer
         run: tauri build --bundles nsis
 
+      - name: Collect release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          $assets = Get-ChildItem -Path src-tauri\target\release -Recurse -File |
+            Where-Object { $_.FullName -match '\\bundle\\' -and ($_.Extension -eq '.exe' -or $_.Extension -eq '.msi' -or $_.Name -like '*.nsis.zip' -or $_.Name -like '*.msi.zip') }
+          if (-not $assets) {
+            throw "No release assets found under src-tauri/target/release/bundle"
+          }
+          foreach ($asset in $assets) {
+            Copy-Item $asset.FullName -Destination release-assets -Force
+            Write-Host "Collected $($asset.FullName)"
+          }
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         env:
@@ -45,5 +59,4 @@ jobs:
           name: cyber-link ${{ github.ref_name }}
           body: Windows release for cyber-link.
           files: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.nsis.zip
+            release-assets/*
