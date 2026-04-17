@@ -358,15 +358,14 @@ mod windows_app {
     use super::*;
     use std::{
         collections::HashMap,
-        io,
         mem,
         sync::{Mutex, OnceLock},
     };
     use tauri::{
         AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
     };
-    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCDESTROY,
         WM_QUERYENDSESSION, WNDPROC,
     };
@@ -390,7 +389,7 @@ mod windows_app {
             if let Ok(config) = load_config() {
                 let _ = tauri::async_runtime::block_on(send_shutdown_signal(&config));
             }
-            return LRESULT(1);
+            return 1;
         }
 
         let prev = wndproc_store()
@@ -412,28 +411,15 @@ mod windows_app {
         DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 
-    fn install_shutdown_hook(window: &tauri::Window) -> tauri::Result<()> {
-        let hwnd = window.hwnd()?;
+    fn install_shutdown_hook(window: &tauri::Window) -> Result<(), String> {
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+        let hwnd_raw = hwnd.0 as isize;
         unsafe {
-            let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, main_window_proc as _);
-            let mut store = wndproc_store().lock().map_err(|e| {
-                tauri::Error::from(io::Error::new(io::ErrorKind::Other, e.to_string()))
-            })?;
-            store.insert(hwnd.0 as isize, prev);
+            let prev = SetWindowLongPtrW(hwnd_raw, GWLP_WNDPROC, main_window_proc as isize);
+            let mut store = wndproc_store().lock().map_err(|e| e.to_string())?;
+            store.insert(hwnd_raw, prev);
         }
         Ok(())
-    }
-
-    fn wide_null(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    fn app_run_key() -> Vec<u16> {
-        wide_null(r"Software\Microsoft\Windows\CurrentVersion\Run")
-    }
-
-    fn autostart_value_name() -> Vec<u16> {
-        wide_null("CyberControl HA Client")
     }
 
     fn write_autostart_registry_entry(enabled: bool) -> Result<(), String> {
@@ -557,23 +543,27 @@ mod windows_app {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
                         let state = app.state::<SharedState>();
-                        if let Ok(config) = load_config() {
-                            if let Ok(snapshot) = state.0.lock().map(|s| s.clone()) {
-                                if let Ok(next) = apply_tray_toggle(
-                                    send_ha_action(&config, HaAction::ToggleAc { on: true }).await,
-                                    snapshot,
-                                    |snapshot| {
-                                        snapshot.ac.is_on = true;
-                                    },
-                                )
-                                .await
-                                {
-                                    if let Ok(mut guard) = state.0.lock() {
-                                        *guard = next.clone();
-                                    }
-                                    emit_state_refresh(&app, &next);
-                                }
+                        let config = match load_config() {
+                            Ok(config) => config,
+                            Err(_) => return,
+                        };
+                        let snapshot = match state.0.lock() {
+                            Ok(guard) => guard.clone(),
+                            Err(_) => return,
+                        };
+                        if let Ok(next) = apply_tray_toggle(
+                            send_ha_action(&config, HaAction::ToggleAc { on: true }).await,
+                            snapshot,
+                            |snapshot| {
+                                snapshot.ac.is_on = true;
+                            },
+                        )
+                        .await
+                        {
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = next.clone();
                             }
+                            emit_state_refresh(&app, &next);
                         }
                     });
                 }
@@ -581,25 +571,28 @@ mod windows_app {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
                         let state = app.state::<SharedState>();
-                        if let Ok(config) = load_config() {
-                            if let Ok(snapshot) = state.0.lock().map(|s| s.clone()) {
-                                let desired = !snapshot.light_on;
-                                if let Ok(next) = apply_tray_toggle(
-                                    send_ha_action(&config, HaAction::ToggleLight { on: desired })
-                                        .await,
-                                    snapshot,
-                                    move |snapshot| {
-                                        snapshot.light_on = desired;
-                                    },
-                                )
-                                .await
-                                {
-                                    if let Ok(mut guard) = state.0.lock() {
-                                        *guard = next.clone();
-                                    }
-                                    emit_state_refresh(&app, &next);
-                                }
+                        let config = match load_config() {
+                            Ok(config) => config,
+                            Err(_) => return,
+                        };
+                        let snapshot = match state.0.lock() {
+                            Ok(guard) => guard.clone(),
+                            Err(_) => return,
+                        };
+                        let desired = !snapshot.light_on;
+                        if let Ok(next) = apply_tray_toggle(
+                            send_ha_action(&config, HaAction::ToggleLight { on: desired }).await,
+                            snapshot,
+                            move |snapshot| {
+                                snapshot.light_on = desired;
+                            },
+                        )
+                        .await
+                        {
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = next.clone();
                             }
+                            emit_state_refresh(&app, &next);
                         }
                     });
                 }
@@ -627,7 +620,9 @@ mod windows_app {
             .on_system_tray_event(handle_tray_event)
             .setup(|app| {
                 if let Some(window) = app.get_window("main") {
-                    install_shutdown_hook(&window)?;
+                    if let Err(err) = install_shutdown_hook(&window) {
+                        eprintln!("failed to install shutdown hook: {err}");
+                    }
                 }
                 hide_main_window(app);
                 Ok(())

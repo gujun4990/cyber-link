@@ -13,6 +13,9 @@
     "allowlist": {
       "all": true
     },
+    "systemTray": {
+      "iconPath": "icons/icon.png"
+    },
     "bundle": {
       "identifier": "com.cyber-link.app"
     },
