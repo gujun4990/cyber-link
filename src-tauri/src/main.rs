@@ -47,6 +47,8 @@ pub struct HaRequest {
     pub body: serde_json::Value,
 }
 
+const WM_QUERYENDSESSION_MESSAGE: u32 = 0x0011;
+
 #[derive(Debug, Deserialize)]
 struct HaEntityState {
     state: String,
@@ -441,6 +443,29 @@ async fn apply_tray_toggle<T>(
     Ok(snapshot)
 }
 
+fn hwnd_store_key_from_raw(hwnd: usize) -> isize {
+    hwnd as isize
+}
+
+fn query_end_session_result_value() -> isize {
+    1
+}
+
+fn handle_windows_message_kind(msg: u32) -> bool {
+    msg == WM_QUERYENDSESSION_MESSAGE
+}
+
+fn set_window_long_ptr_result(prev: isize, last_error: u32) -> Result<isize, String> {
+    if prev == 0 && last_error != 0 {
+        return Err(format!(
+            "SetWindowLongPtrW failed: {}",
+            std::io::Error::from_raw_os_error(last_error as i32)
+        ));
+    }
+
+    Ok(prev)
+}
+
 #[cfg(windows)]
 mod windows_app {
     use super::*;
@@ -453,9 +478,9 @@ mod windows_app {
         AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
     };
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCDESTROY,
-        WM_QUERYENDSESSION, WNDPROC,
+        CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCDESTROY, WNDPROC,
     };
     use winreg::{enums::*, RegKey};
 
@@ -467,27 +492,35 @@ mod windows_app {
         ORIGINAL_WNDPROCS.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
+    fn hwnd_store_key(hwnd: HWND) -> isize {
+        hwnd_store_key_from_raw(hwnd as usize)
+    }
+
+    fn query_end_session_result() -> LRESULT {
+        query_end_session_result_value() as LRESULT
+    }
+
     unsafe extern "system" fn main_window_proc(
         hwnd: HWND,
         msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        if msg == WM_QUERYENDSESSION {
+        if handle_windows_message_kind(msg) {
             if let Ok(config) = load_config() {
                 let _ = tauri::async_runtime::block_on(send_shutdown_signal(&config));
             }
-            return 1;
+            return query_end_session_result();
         }
 
         let prev = wndproc_store()
             .lock()
             .ok()
-            .and_then(|store| store.get(&(hwnd.0 as isize)).copied());
+            .and_then(|store| store.get(&hwnd_store_key(hwnd)).copied());
 
         if msg == WM_NCDESTROY {
             if let Ok(mut store) = wndproc_store().lock() {
-                store.remove(&(hwnd.0 as isize));
+                store.remove(&hwnd_store_key(hwnd));
             }
         }
 
@@ -501,11 +534,18 @@ mod windows_app {
 
     fn install_shutdown_hook(window: &tauri::Window) -> Result<(), String> {
         let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-        let hwnd_raw = hwnd.0 as isize;
+        let hwnd = hwnd.0 as HWND;
+        let hwnd_key = hwnd_store_key(hwnd);
         unsafe {
-            let prev = SetWindowLongPtrW(hwnd_raw, GWLP_WNDPROC, main_window_proc as isize);
+            SetLastError(0);
+            let prev = SetWindowLongPtrW(
+                hwnd,
+                GWLP_WNDPROC,
+                main_window_proc as *const () as isize,
+            );
+            let prev = set_window_long_ptr_result(prev, GetLastError())?;
             let mut store = wndproc_store().lock().map_err(|e| e.to_string())?;
-            store.insert(hwnd_raw, prev);
+            store.insert(hwnd_key, prev);
         }
         Ok(())
     }
@@ -704,12 +744,39 @@ mod windows_app {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn handle_windows_message(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        if msg == WM_QUERYENDSESSION {
+        if handle_windows_message_kind(msg) {
             let _ = (wparam, lparam);
-            Some(LRESULT(1))
+            Some(query_end_session_result())
         } else {
             None
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{handle_windows_message, hwnd_store_key, query_end_session_result};
+        use windows_sys::Win32::Foundation::{HWND, LPARAM};
+        use windows_sys::Win32::UI::WindowsAndMessaging::WM_QUERYENDSESSION;
+
+        #[test]
+        fn hwnd_store_key_uses_raw_pointer_hwnd_shape() {
+            let hwnd = 0x1234usize as HWND;
+
+            assert_eq!(hwnd_store_key(hwnd), 0x1234isize);
+        }
+
+        #[test]
+        fn query_end_session_result_returns_true_lresult_alias() {
+            assert_eq!(query_end_session_result(), 1);
+        }
+
+        #[test]
+        fn handle_windows_message_returns_query_end_session_success() {
+            let result = handle_windows_message(WM_QUERYENDSESSION, 0, 0 as LPARAM);
+
+            assert_eq!(result, Some(1));
         }
     }
 
@@ -749,14 +816,86 @@ fn main() {}
 mod tests {
     use super::{
         apply_tray_toggle, autostart_registry_value, bootstrap_default_startup,
-        build_notification_request, initial_snapshot, notification_timeout, offline_snapshot,
+        build_notification_request, handle_windows_message_kind, hwnd_store_key_from_raw,
+        initial_snapshot, notification_timeout, offline_snapshot, query_end_session_result_value,
         resolve_config_path, run_best_effort_three, run_serialized_tray_action,
+        set_window_long_ptr_result,
         snapshot_from_home_assistant, AppConfig, DeviceIds, DeviceSnapshot, HaAction,
     };
     use anyhow::anyhow;
+    use std::io::Cursor;
     use std::path::PathBuf;
     use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex as StdMutex};
     use std::time::Duration;
+
+    fn read_le_u16(bytes: &[u8], offset: usize) -> u16 {
+        u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+    }
+
+    fn read_le_u32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ])
+    }
+
+    fn read_le_i32(bytes: &[u8], offset: usize) -> i32 {
+        i32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ])
+    }
+
+    fn assert_png_payload(index: usize, payload: &[u8], width: u32, height: u32) {
+        let decoder = png::Decoder::new(Cursor::new(payload));
+        let mut reader = decoder
+            .read_info()
+            .unwrap_or_else(|error| panic!("directory entry {index} PNG payload should decode: {error}"));
+        let mut decoded = vec![0; reader.output_buffer_size()];
+        let frame = reader
+            .next_frame(&mut decoded)
+            .unwrap_or_else(|error| panic!("directory entry {index} PNG payload should read a frame: {error}"));
+
+        assert_eq!(frame.width, width, "directory entry {index} PNG width should match the ICO directory");
+        assert_eq!(frame.height, height, "directory entry {index} PNG height should match the ICO directory");
+        assert!(
+            frame.buffer_size() > 0,
+            "directory entry {index} PNG frame should decode pixel data"
+        );
+    }
+
+    fn assert_dib_payload(index: usize, payload: &[u8], width: u32, height: u32, bit_count: u16) {
+        assert!(payload.len() >= 40, "directory entry {index} DIB payload should include a BITMAPINFOHEADER");
+
+        let header_size = read_le_u32(payload, 0) as usize;
+        assert!(header_size >= 40, "directory entry {index} DIB header should be at least a BITMAPINFOHEADER");
+        assert!(payload.len() >= header_size, "directory entry {index} DIB payload should include the full header");
+
+        let dib_width = read_le_i32(payload, 4);
+        let dib_height = read_le_i32(payload, 8);
+        let planes = read_le_u16(payload, 12);
+        let dib_bit_count = read_le_u16(payload, 14);
+        let compression = read_le_u32(payload, 16);
+        let declared_bitmap_bytes = read_le_u32(payload, 20) as usize;
+
+        assert_eq!(planes, 1, "directory entry {index} DIB payload should declare one plane");
+        assert_eq!(dib_width.unsigned_abs(), width, "directory entry {index} DIB width should match the ICO directory");
+        assert_ne!(dib_height, 0, "directory entry {index} DIB height should not be zero");
+        assert_eq!(dib_height % 2, 0, "directory entry {index} DIB height should include XOR and AND masks");
+        assert_eq!(dib_height.unsigned_abs() / 2, height, "directory entry {index} DIB height should match the ICO directory once the mask row is excluded");
+        assert_eq!(dib_bit_count, bit_count, "directory entry {index} DIB bit depth should match the ICO directory");
+        assert!(dib_bit_count >= 8, "directory entry {index} DIB should not use a low-color placeholder format");
+        assert!(matches!(compression, 0 | 3), "directory entry {index} DIB compression should be BI_RGB or BI_BITFIELDS");
+        assert!(payload.len() > header_size, "directory entry {index} DIB payload should contain bitmap data after the header");
+        assert!(
+            declared_bitmap_bytes == 0 || declared_bitmap_bytes <= payload.len() - header_size,
+            "directory entry {index} DIB declared bitmap length should fit inside the payload"
+        );
+    }
 
     #[test]
     fn parses_nested_entity_ids_from_config_json() {
@@ -883,6 +1022,140 @@ mod tests {
         );
 
         assert_eq!(value, r#""C:\Program Files\Cyber\cyber-link.exe""#);
+    }
+
+    #[test]
+    fn windows_icon_file_declares_valid_multisize_images() {
+        let icon_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.ico");
+        let bytes = std::fs::read(&icon_path).expect("icon should exist");
+
+        assert!(bytes.len() >= 6, "icon should include the ico header");
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0, "reserved field should be zero");
+        assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), 1, "icon should declare ico resource type");
+
+        let image_count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+        assert!(image_count >= 4, "icon should provide multiple image sizes for Windows packaging");
+
+        let directory_len = 6 + image_count * 16;
+        assert!(bytes.len() >= directory_len, "icon directory should fit inside the file");
+
+        let mut sizes = Vec::with_capacity(image_count);
+        for index in 0..image_count {
+            let entry_offset = 6 + index * 16;
+            let width = if bytes[entry_offset] == 0 { 256 } else { bytes[entry_offset] as u32 };
+            let height = if bytes[entry_offset + 1] == 0 { 256 } else { bytes[entry_offset + 1] as u32 };
+            let color_count = bytes[entry_offset + 2];
+            let reserved = bytes[entry_offset + 3];
+            let bit_count = read_le_u16(&bytes, entry_offset + 6);
+            let image_size = read_le_u32(&bytes, entry_offset + 8) as usize;
+            let image_offset = read_le_u32(&bytes, entry_offset + 12) as usize;
+
+            assert_eq!(reserved, 0, "directory entry {index} reserved field should be zero");
+            assert_eq!(color_count, 0, "directory entry {index} should use true-color image data");
+            assert!(bit_count >= 8, "directory entry {index} should not use a low-color placeholder format");
+            assert!(image_size > 0, "directory entry {index} image payload should not be empty");
+            assert!(image_offset >= directory_len, "directory entry {index} payload should start after the directory");
+            assert!(
+                image_offset.checked_add(image_size).is_some_and(|end| end <= bytes.len()),
+                "directory entry {index} payload should fit inside the file"
+            );
+
+            let image_end = image_offset + image_size;
+            let payload = &bytes[image_offset..image_end];
+            match payload {
+                [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, ..] => {
+                    assert_png_payload(index, payload, width, height);
+                }
+                [40, 0, 0, 0, ..] => {
+                    assert_dib_payload(index, payload, width, height, bit_count);
+                }
+                _ => panic!("directory entry {index} should begin with PNG data or a BITMAPINFOHEADER"),
+            }
+
+            sizes.push((width, height));
+        }
+
+        assert!(sizes.contains(&(16, 16)), "icon should include a 16x16 image");
+        assert!(sizes.contains(&(32, 32)), "icon should include a 32x32 image");
+        assert!(sizes.contains(&(48, 48)), "icon should include a 48x48 image");
+        assert!(sizes.contains(&(256, 256)), "icon should include a 256x256 image");
+    }
+
+    #[test]
+    fn windows_tray_icon_png_uses_rgba_pixels() {
+        let icon_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.png");
+        let decoder = png::Decoder::new(
+            std::fs::File::open(&icon_path).expect("tray icon PNG should exist"),
+        );
+        let reader = decoder
+            .read_info()
+            .expect("tray icon PNG should decode");
+
+        assert_eq!(
+            reader.info().color_type,
+            png::ColorType::Rgba,
+            "tray icon PNG should use RGBA pixels for Tauri Windows metadata generation"
+        );
+    }
+
+    #[test]
+    fn windows_tray_icon_png_matches_expected_tray_asset_dimensions() {
+        let icon_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.png");
+        let decoder = png::Decoder::new(
+            std::fs::File::open(&icon_path).expect("tray icon PNG should exist"),
+        );
+        let reader = decoder
+            .read_info()
+            .expect("tray icon PNG should decode");
+
+        assert_eq!(
+            reader.info().width,
+            32,
+            "tray icon PNG should stay 32px wide for Windows tray metadata generation"
+        );
+        assert_eq!(
+            reader.info().height,
+            32,
+            "tray icon PNG should stay 32px tall for Windows tray metadata generation"
+        );
+    }
+
+    #[test]
+    fn set_window_long_ptr_result_treats_zero_with_error_as_failure() {
+        let err = set_window_long_ptr_result(0, 5).expect_err(
+            "a zero SetWindowLongPtrW result with a non-zero last error should fail",
+        );
+
+        assert!(
+            err.contains("SetWindowLongPtrW"),
+            "error should identify the failing Windows API call"
+        );
+    }
+
+    #[test]
+    fn set_window_long_ptr_result_accepts_zero_without_error() {
+        assert_eq!(
+            set_window_long_ptr_result(0, 0).expect(
+                "a zero SetWindowLongPtrW result with a cleared last error should be accepted"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn shared_shutdown_message_helper_identifies_query_end_session() {
+        assert!(handle_windows_message_kind(0x0011));
+        assert!(!handle_windows_message_kind(0x0082));
+    }
+
+    #[test]
+    fn shared_shutdown_message_helper_returns_success_value() {
+        assert_eq!(query_end_session_result_value(), 1);
+    }
+
+    #[test]
+    fn shared_shutdown_message_helper_preserves_raw_hwnd_value() {
+        assert_eq!(hwnd_store_key_from_raw(0x1234usize), 0x1234isize);
     }
 
     #[tokio::test]

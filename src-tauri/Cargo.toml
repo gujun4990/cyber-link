@@ -26,6 +26,7 @@ winreg = "0.50"
 tauri-build = "1"
 
 [dev-dependencies]
+png = "0.17"
 tempfile = "3"
 
 [[bin]]

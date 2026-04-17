@@ -701,6 +701,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "directories",
+ "png 0.17.16",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
