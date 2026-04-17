@@ -1,0 +1,25 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://localhost:3000",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "CyberControl HA Client",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": true
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "CyberControl HA Client",
+        "visible": false,
+        "resizable": true
+      }
+    ]
+  }
+}

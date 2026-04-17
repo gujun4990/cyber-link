@@ -1,0 +1,9 @@
+{
+  "ha_url": "https://home-assistant.local",
+  "token": "YOUR_HOME_ASSISTANT_LONG_LIVED_TOKEN",
+  "pc_entity_id": "input_boolean.your_pc_online",
+  "entity_id": {
+    "ac": "climate.your_ac_entity",
+    "light": "light.your_light_entity"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "CyberControl HA Client",
+  "description": "A Windows-style Home Assistant client for internet cafe environment control, featuring AC and lighting management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
