@@ -47,6 +47,13 @@ pub struct HaRequest {
     pub body: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct HaEntityState {
+    state: String,
+    #[serde(default)]
+    attributes: serde_json::Value,
+}
+
 #[cfg_attr(not(windows), allow(dead_code))]
 static HA_CLIENT: OnceLock<Client> = OnceLock::new();
 
@@ -165,6 +172,66 @@ async fn send_ha_request(config: &AppConfig, request: HaRequest) -> Result<()> {
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
+async fn fetch_ha_entity_state(config: &AppConfig, entity_id: &str) -> Result<HaEntityState> {
+    let base = config.ha_url.trim_end_matches('/');
+    Ok(ha_client()
+        .get(format!("{base}/api/states/{entity_id}"))
+        .bearer_auth(&config.token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<HaEntityState>()
+        .await?)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_temperature(attributes: &serde_json::Value) -> Option<i32> {
+    for key in ["temperature", "target_temperature", "current_temperature"] {
+        if let Some(value) = attributes.get(key) {
+            if let Some(temp) = value.as_i64() {
+                return Some(temp as i32);
+            }
+            if let Some(temp) = value.as_f64() {
+                return Some(temp.round() as i32);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn snapshot_from_ha_state(
+    pc_state: &HaEntityState,
+    ac_state: &HaEntityState,
+    light_state: &HaEntityState,
+) -> DeviceSnapshot {
+    let mut snapshot = initial_snapshot();
+    snapshot.connected = pc_state.state.eq_ignore_ascii_case("on");
+    snapshot.ac.is_on = !ac_state.state.eq_ignore_ascii_case("off");
+
+    if let Some(temp) = parse_temperature(&ac_state.attributes) {
+        snapshot.ac.temp = temp;
+    }
+
+    snapshot.light_on = light_state.state.eq_ignore_ascii_case("on");
+    snapshot
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn snapshot_from_home_assistant(
+    pc_state: &serde_json::Value,
+    ac_state: &serde_json::Value,
+    light_state: &serde_json::Value,
+) -> Result<DeviceSnapshot> {
+    let pc_state: HaEntityState = serde_json::from_value(pc_state.clone())?;
+    let ac_state: HaEntityState = serde_json::from_value(ac_state.clone())?;
+    let light_state: HaEntityState = serde_json::from_value(light_state.clone())?;
+
+    Ok(snapshot_from_ha_state(&pc_state, &ac_state, &light_state))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
 async fn send_ha_request_with_timeout(
     config: &AppConfig,
     request: HaRequest,
@@ -225,6 +292,27 @@ async fn send_shutdown_signal(config: &AppConfig) -> Result<()> {
         },
     )
     .await
+}
+
+static TRAY_ACTION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+async fn run_serialized_tray_action<F, Fut>(action: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let lock = TRAY_ACTION_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _guard = lock.lock().await;
+    action().await;
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceSnapshot> {
+    let pc_state = fetch_ha_entity_state(config, &config.pc_entity_id).await?;
+    let ac_state = fetch_ha_entity_state(config, &config.entity_id.ac).await?;
+    let light_state = fetch_ha_entity_state(config, &config.entity_id.light).await?;
+
+    Ok(snapshot_from_ha_state(&pc_state, &ac_state, &light_state))
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -481,7 +569,13 @@ mod windows_app {
         )
         .await
         {
-            Ok(()) => initial_snapshot(),
+            Ok(()) => match fetch_current_snapshot(&config).await {
+                Ok(snapshot) => snapshot,
+                Err(err) => {
+                    eprintln!("failed to fetch current snapshot: {err}");
+                    offline_snapshot()
+                }
+            },
             Err(err) => {
                 eprintln!("startup bootstrap failed: {err}");
                 offline_snapshot()
@@ -542,58 +636,64 @@ mod windows_app {
                 "ac_on" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let state = app.state::<SharedState>();
-                        let config = match load_config() {
-                            Ok(config) => config,
-                            Err(_) => return,
-                        };
-                        let snapshot = match state.0.lock() {
-                            Ok(guard) => guard.clone(),
-                            Err(_) => return,
-                        };
-                        if let Ok(next) = apply_tray_toggle(
-                            send_ha_action(&config, HaAction::ToggleAc { on: true }).await,
-                            snapshot,
-                            |snapshot| {
-                                snapshot.ac.is_on = true;
-                            },
-                        )
-                        .await
-                        {
-                            if let Ok(mut guard) = state.0.lock() {
-                                *guard = next.clone();
+                        run_serialized_tray_action(|| async move {
+                            let state = app.state::<SharedState>();
+                            let config = match load_config() {
+                                Ok(config) => config,
+                                Err(_) => return,
+                            };
+                            let snapshot = match state.0.lock() {
+                                Ok(guard) => guard.clone(),
+                                Err(_) => return,
+                            };
+                            if let Ok(next) = apply_tray_toggle(
+                                send_ha_action(&config, HaAction::ToggleAc { on: true }).await,
+                                snapshot,
+                                |snapshot| {
+                                    snapshot.ac.is_on = true;
+                                },
+                            )
+                            .await
+                            {
+                                if let Ok(mut guard) = state.0.lock() {
+                                    *guard = next.clone();
+                                }
+                                emit_state_refresh(&app, &next);
                             }
-                            emit_state_refresh(&app, &next);
-                        }
+                        })
+                        .await;
                     });
                 }
                 "light_toggle" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let state = app.state::<SharedState>();
-                        let config = match load_config() {
-                            Ok(config) => config,
-                            Err(_) => return,
-                        };
-                        let snapshot = match state.0.lock() {
-                            Ok(guard) => guard.clone(),
-                            Err(_) => return,
-                        };
-                        let desired = !snapshot.light_on;
-                        if let Ok(next) = apply_tray_toggle(
-                            send_ha_action(&config, HaAction::ToggleLight { on: desired }).await,
-                            snapshot,
-                            move |snapshot| {
-                                snapshot.light_on = desired;
-                            },
-                        )
-                        .await
-                        {
-                            if let Ok(mut guard) = state.0.lock() {
-                                *guard = next.clone();
+                        run_serialized_tray_action(|| async move {
+                            let state = app.state::<SharedState>();
+                            let config = match load_config() {
+                                Ok(config) => config,
+                                Err(_) => return,
+                            };
+                            let snapshot = match state.0.lock() {
+                                Ok(guard) => guard.clone(),
+                                Err(_) => return,
+                            };
+                            let desired = !snapshot.light_on;
+                            if let Ok(next) = apply_tray_toggle(
+                                send_ha_action(&config, HaAction::ToggleLight { on: desired }).await,
+                                snapshot,
+                                move |snapshot| {
+                                    snapshot.light_on = desired;
+                                },
+                            )
+                            .await
+                            {
+                                if let Ok(mut guard) = state.0.lock() {
+                                    *guard = next.clone();
+                                }
+                                emit_state_refresh(&app, &next);
                             }
-                            emit_state_refresh(&app, &next);
-                        }
+                        })
+                        .await;
                     });
                 }
                 "quit" => {
@@ -650,11 +750,12 @@ mod tests {
     use super::{
         apply_tray_toggle, autostart_registry_value, bootstrap_default_startup,
         build_notification_request, initial_snapshot, notification_timeout, offline_snapshot,
-        resolve_config_path, run_best_effort_three, AppConfig, DeviceIds, DeviceSnapshot, HaAction,
+        resolve_config_path, run_best_effort_three, run_serialized_tray_action,
+        snapshot_from_home_assistant, AppConfig, DeviceIds, DeviceSnapshot, HaAction,
     };
     use anyhow::anyhow;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex as StdMutex};
+    use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex as StdMutex};
     use std::time::Duration;
 
     #[test]
@@ -851,6 +952,32 @@ mod tests {
         assert_eq!(snapshot.light_on, true);
     }
 
+    #[test]
+    fn builds_snapshot_from_home_assistant_entity_states() {
+        let pc_state = serde_json::json!({
+            "state": "on",
+            "attributes": {}
+        });
+        let ac_state = serde_json::json!({
+            "state": "cool",
+            "attributes": {
+                "temperature": 24
+            }
+        });
+        let light_state = serde_json::json!({
+            "state": "off",
+            "attributes": {}
+        });
+
+        let snapshot = snapshot_from_home_assistant(&pc_state, &ac_state, &light_state)
+            .expect("snapshot should build");
+
+        assert!(snapshot.connected);
+        assert!(snapshot.ac.is_on);
+        assert_eq!(snapshot.ac.temp, 24);
+        assert!(!snapshot.light_on);
+    }
+
     #[tokio::test]
     async fn best_effort_sequence_keeps_running_after_failure() {
         let calls = Arc::new(StdMutex::new(Vec::new()));
@@ -907,5 +1034,42 @@ mod tests {
         .expect("toggle should succeed");
 
         assert!(!next.ac.is_on);
+    }
+
+    #[tokio::test]
+    async fn serialized_tray_actions_wait_for_each_other() {
+        let entered_second = Arc::new(AtomicBool::new(false));
+        let first_released = Arc::new(tokio::sync::Notify::new());
+        let first_started = Arc::new(tokio::sync::Notify::new());
+
+        let entered_second_clone = Arc::clone(&entered_second);
+        let first_released_clone = Arc::clone(&first_released);
+        let first_started_clone = Arc::clone(&first_started);
+
+        let first = tokio::spawn(async move {
+            run_serialized_tray_action(|| async {
+                first_started_clone.notify_one();
+                first_released_clone.notified().await;
+            })
+            .await;
+        });
+
+        first_started.notified().await;
+
+        let second = tokio::spawn(async move {
+            run_serialized_tray_action(|| async {
+                entered_second_clone.store(true, Ordering::SeqCst);
+            })
+            .await;
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!entered_second.load(Ordering::SeqCst));
+
+        first_released.notify_one();
+        let _ = first.await;
+        let _ = second.await;
+
+        assert!(entered_second.load(Ordering::SeqCst));
     }
 }

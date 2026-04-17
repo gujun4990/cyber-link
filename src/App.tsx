@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
+import { applyStateRefresh } from './appState.js';
 
 // --- 类型定义 ---
 interface ACState {
@@ -92,8 +93,17 @@ export default function App() {
     void (async () => {
       unlisten = await listen<DeviceState>('state-refresh', (event) => {
         if (event.payload) {
-          setDevice(event.payload);
-          setActionFailed(false);
+          const next = applyStateRefresh(
+            {
+              device,
+              initFailed,
+              actionFailed,
+            },
+            event.payload,
+          );
+          setDevice(next.device);
+          setInitFailed(next.initFailed);
+          setActionFailed(next.actionFailed);
         }
       });
 
