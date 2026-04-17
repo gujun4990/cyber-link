@@ -358,22 +358,19 @@ mod windows_app {
     use super::*;
     use std::{
         collections::HashMap,
+        io,
         mem,
         sync::{Mutex, OnceLock},
     };
     use tauri::{
         AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
     };
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW, HKEY,
-        HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
-    };
     use windows::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCDESTROY,
         WM_QUERYENDSESSION, WNDPROC,
     };
+    use winreg::{enums::*, RegKey};
 
     pub struct SharedState(pub Mutex<DeviceSnapshot>);
 
@@ -419,7 +416,9 @@ mod windows_app {
         let hwnd = window.hwnd()?;
         unsafe {
             let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, main_window_proc as _);
-            let mut store = wndproc_store().lock().map_err(|e| e.to_string())?;
+            let mut store = wndproc_store().lock().map_err(|e| {
+                tauri::Error::from(io::Error::new(io::ErrorKind::Other, e.to_string()))
+            })?;
             store.insert(hwnd.0 as isize, prev);
         }
         Ok(())
@@ -440,86 +439,36 @@ mod windows_app {
     fn write_autostart_registry_entry(enabled: bool) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let value = autostart_registry_value(&exe);
-        let key_path = app_run_key();
-        let value_name = autostart_value_name();
-
-        unsafe {
-            let mut key = HKEY::default();
-            RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(key_path.as_ptr()),
-                0,
-                None,
-                REG_OPTION_NON_VOLATILE,
-                KEY_SET_VALUE,
-                None,
-                &mut key,
-                None,
-            )
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = hkcu
+            .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
             .map_err(|e| e.to_string())?;
 
-            let result = if enabled {
-                let encoded = wide_null(&value);
-                RegSetValueExW(
-                    key,
-                    PCWSTR(value_name.as_ptr()),
-                    0,
-                    REG_SZ,
-                    Some(std::slice::from_raw_parts(
-                        encoded.as_ptr() as *const u8,
-                        encoded.len() * 2,
-                    )),
-                )
-                .map_err(|e| e.to_string())
-            } else {
-                RegDeleteValueW(key, PCWSTR(value_name.as_ptr())).map_err(|e| e.to_string())
-            };
-
-            RegCloseKey(key);
-            result
+        if enabled {
+            key.set_value("CyberControl HA Client", &value)
+                .map_err(|e| e.to_string())?;
+        } else {
+            let _ = key.delete_value("CyberControl HA Client");
         }
+
+        Ok(())
     }
 
     fn verify_autostart_registry_entry() -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let expected = autostart_registry_value(&exe);
 
-        unsafe {
-            let mut key = HKEY::default();
-            RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(app_run_key().as_ptr()),
-                0,
-                KEY_QUERY_VALUE,
-                None,
-                &mut key,
-            )
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let key = hkcu
+            .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
             .map_err(|e| e.to_string())?;
 
-            let mut buffer = vec![0u16; 1024];
-            let mut buffer_len = (buffer.len() * 2) as u32;
-            let result = windows::Win32::System::Registry::RegGetValueW(
-                key,
-                None,
-                PCWSTR(autostart_value_name().as_ptr()),
-                windows::Win32::System::Registry::RRF_RT_REG_SZ,
-                None,
-                Some(buffer.as_mut_ptr() as *mut _),
-                Some(&mut buffer_len),
-            )
-            .map_err(|e| e.to_string());
-
-            RegCloseKey(key);
-
-            result?;
-            let units = buffer_len as usize / 2;
-            let slice = buffer.get(..units).unwrap_or(&[]);
-            let actual = String::from_utf16_lossy(slice.strip_suffix(&[0]).unwrap_or(slice));
-            if actual.trim_matches('\0') != expected {
-                return Err("autostart registry value mismatch".into());
-            }
-            Ok(())
+        let actual: String = key.get_value("CyberControl HA Client").map_err(|e| e.to_string())?;
+        if actual != expected {
+            return Err("autostart registry value mismatch".into());
         }
+
+        Ok(())
     }
 
     fn emit_state_refresh(app: &AppHandle, snapshot: &DeviceSnapshot) {
@@ -663,7 +612,7 @@ mod windows_app {
     }
 
     pub fn handle_windows_message(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        if msg == WM_QUERYENDSESSION.0 as u32 {
+        if msg == WM_QUERYENDSESSION {
             let _ = (wparam, lparam);
             Some(LRESULT(1))
         } else {
