@@ -13,7 +13,7 @@ directories = "5"
 tempfile = { version = "3", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-tauri = { version = "1", features = ["system-tray", "api-all"] }
+tauri = { version = "1", features = ["system-tray", "api-all", "custom-protocol"] }
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_System_Registry",
