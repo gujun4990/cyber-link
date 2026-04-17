@@ -6,7 +6,7 @@
     "distDir": "../dist"
   },
   "package": {
-    "productName": "CyberControl HA Client",
+    "productName": "CyberControl_HA_Client",
     "version": "0.1.0"
   },
   "tauri": {
