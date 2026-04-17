@@ -13,6 +13,9 @@
     "allowlist": {
       "all": true
     },
+    "bundle": {
+      "identifier": "com.cyber-link.app"
+    },
     "windows": [
       {
         "label": "main",
