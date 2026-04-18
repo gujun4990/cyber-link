@@ -639,6 +639,54 @@ fn set_window_long_ptr_result(prev: isize, last_error: u32) -> Result<isize, Str
     Ok(prev)
 }
 
+fn try_restore_existing_window<F, R, L, P>(
+    attempts: usize,
+    mut find_window: F,
+    mut restore_window: R,
+    mut log_missing_window: L,
+    mut pause_between_attempts: P,
+) -> bool
+where
+    F: FnMut() -> Option<usize>,
+    R: FnMut(usize),
+    L: FnMut(),
+    P: FnMut(),
+{
+    for _ in 0..attempts {
+        if let Some(hwnd) = find_window() {
+            restore_window(hwnd);
+            return true;
+        }
+
+        pause_between_attempts();
+    }
+
+    log_missing_window();
+    true
+}
+
+fn main_window_title() -> &'static str {
+    static TITLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    TITLE
+        .get_or_init(|| {
+            serde_json::from_str::<serde_json::Value>(include_str!("../tauri.conf.json"))
+                .ok()
+                .and_then(|config| {
+                    config
+                        .get("tauri")?
+                        .get("windows")?
+                        .as_array()?
+                        .first()?
+                        .get("title")?
+                        .as_str()
+                        .map(|title| title.to_string())
+                })
+                .unwrap_or_else(|| "CyberControl HA Client".to_string())
+        })
+        .as_str()
+}
+
 #[cfg(windows)]
 mod windows_app {
     use super::*;
@@ -646,6 +694,7 @@ mod windows_app {
         collections::HashMap,
         mem,
         sync::{Mutex, OnceLock},
+        time::Duration,
     };
     use tauri::{AppHandle, Manager, State};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -660,7 +709,7 @@ mod windows_app {
     pub struct SharedState(pub Mutex<DeviceSnapshot>);
 
     static ORIGINAL_WNDPROCS: OnceLock<Mutex<HashMap<isize, isize>>> = OnceLock::new();
-    static INSTANCE_MUTEX: OnceLock<isize> = OnceLock::new();
+    static INSTANCE_MUTEX: OnceLock<usize> = OnceLock::new();
 
     fn wndproc_store() -> &'static Mutex<HashMap<isize, isize>> {
         ORIGINAL_WNDPROCS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -676,29 +725,38 @@ mod windows_app {
 
     fn try_restore_existing_main_window() -> bool {
         const INSTANCE_MUTEX_NAME: &str = "Local\\CyberControl_HA_Client_SingleInstance";
-        const MAIN_WINDOW_TITLE: &str = "CyberControl HA Client";
 
         unsafe {
             SetLastError(0);
             let mutex_name = to_wide(INSTANCE_MUTEX_NAME);
             let mutex = CreateMutexW(std::ptr::null_mut(), 1, mutex_name.as_ptr());
 
-            if mutex == 0 {
+            if mutex.is_null() {
                 return false;
             }
 
-            let _ = INSTANCE_MUTEX.set(mutex);
+            let _ = INSTANCE_MUTEX.set(mutex as usize);
 
             if GetLastError() == ERROR_ALREADY_EXISTS {
-                let window_title = to_wide(MAIN_WINDOW_TITLE);
-                let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
-                if !hwnd.is_null() {
-                    let _ = ShowWindow(hwnd, SW_RESTORE);
-                    let _ = SetForegroundWindow(hwnd);
-                    return true;
-                }
-
-                eprintln!("single-instance mutex exists but main window was not found; continuing startup");
+                let window_title = to_wide(main_window_title());
+                return try_restore_existing_window(
+                    3,
+                    || {
+                        let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
+                        (!hwnd.is_null()).then_some(hwnd as usize)
+                    },
+                    |hwnd| unsafe {
+                        let hwnd = hwnd as HWND;
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                        let _ = SetForegroundWindow(hwnd);
+                    },
+                    || {
+                        eprintln!(
+                            "single-instance mutex exists but main window was not found; skipping duplicate startup"
+                        );
+                    },
+                    || std::thread::sleep(Duration::from_millis(50)),
+                );
             }
         }
 
@@ -1009,12 +1067,12 @@ mod tests {
         apply_tray_toggle, autostart_registry_value, bootstrap_default_startup,
         build_notification_request, handle_windows_message_kind, hwnd_store_key_from_raw,
         initial_snapshot, notification_timeout, offline_snapshot, query_end_session_result_value,
-        run_best_effort_three, run_serialized_tray_action,
-        resolve_user_config_path_from_base_dir, retry_startup_task, set_window_long_ptr_result,
-        refresh_snapshot_with_retry, startup_window_action, tolerate_autostart_error,
-        snapshot_from_home_assistant, snapshot_from_optional_home_assistant, AppConfig,
-        DeviceIds, DeviceSnapshot, HaAction, StartupMode, StartupWindowAction,
-        bootstrap_startup_mode, startup_mode_from_args,
+        refresh_snapshot_with_retry, resolve_user_config_path_from_base_dir, retry_startup_task,
+        run_best_effort_three, run_serialized_tray_action, set_window_long_ptr_result,
+        snapshot_from_home_assistant, snapshot_from_optional_home_assistant,
+        startup_window_action, tolerate_autostart_error, try_restore_existing_window,
+        AppConfig, DeviceIds, DeviceSnapshot, HaAction, StartupMode, StartupWindowAction,
+        bootstrap_startup_mode, main_window_title, startup_mode_from_args,
     };
     use anyhow::anyhow;
     use std::io::Cursor;
@@ -1329,6 +1387,78 @@ mod tests {
     #[test]
     fn autostart_hides_the_main_window() {
         assert_eq!(startup_window_action(StartupMode::Autostart), StartupWindowAction::Hide);
+    }
+
+    #[test]
+    fn main_window_title_matches_tauri_config() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri config should parse");
+        let expected = config
+            .get("tauri")
+            .and_then(|tauri| tauri.get("windows"))
+            .and_then(|windows| windows.as_array())
+            .and_then(|windows| windows.first())
+            .and_then(|window| window.get("title"))
+            .and_then(|title| title.as_str())
+            .expect("tauri config should declare a window title");
+
+        assert_eq!(main_window_title(), expected);
+    }
+
+    #[test]
+    fn single_instance_restore_retries_before_succeeding() {
+        let attempts = Arc::new(StdMutex::new(0usize));
+        let restored = Arc::new(StdMutex::new(Vec::new()));
+
+        let result = try_restore_existing_window(
+            3,
+            {
+                let attempts = Arc::clone(&attempts);
+                move || {
+                    let mut attempts = attempts.lock().unwrap();
+                    *attempts += 1;
+                    if *attempts < 2 {
+                        None
+                    } else {
+                        Some(0x1234)
+                    }
+                }
+            },
+            {
+                let restored = Arc::clone(&restored);
+                move |hwnd| restored.lock().unwrap().push(hwnd)
+            },
+            || panic!("should not log missing window when a retry succeeds"),
+            || {},
+        );
+
+        assert!(result);
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        assert_eq!(restored.lock().unwrap().as_slice(), &[0x1234]);
+    }
+
+    #[test]
+    fn single_instance_restore_fails_closed_when_window_never_appears() {
+        let restored = Arc::new(StdMutex::new(Vec::new()));
+        let missing = Arc::new(AtomicBool::new(false));
+
+        let result = try_restore_existing_window(
+            2,
+            || None,
+            {
+                let restored = Arc::clone(&restored);
+                move |hwnd| restored.lock().unwrap().push(hwnd)
+            },
+            {
+                let missing = Arc::clone(&missing);
+                move || missing.store(true, Ordering::SeqCst)
+            },
+            || {},
+        );
+
+        assert!(result);
+        assert!(restored.lock().unwrap().is_empty());
+        assert!(missing.load(Ordering::SeqCst));
     }
 
     #[test]
