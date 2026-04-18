@@ -30,14 +30,13 @@ jobs:
       - name: Install Windows native frontend bindings
         run: npm install --no-save @rollup/rollup-win32-x64-msvc@4.60.1 @tailwindcss/oxide-win32-x64-msvc@4.2.2 lightningcss-win32-x64-msvc@1.32.0
 
+      # Build the web assets before packaging so Tauri embeds the final frontend bundle.
       - name: Build frontend
         run: npm run build
 
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@v1
-
-      - name: Build Windows installer
-        run: tauri build --bundles nsis
+      # Use the repo-pinned Tauri CLI to keep CI packaging aligned with local builds.
+      - name: Build Tauri app
+        run: npm run tauri:build -- --bundles nsis
 
       - name: Collect release assets
         shell: pwsh

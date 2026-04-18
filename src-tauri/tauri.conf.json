@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "CyberControl_HA_Client",
-    "version": "0.1.20"
+    "version": "0.1.21"
   },
   "tauri": {
     "allowlist": {
@@ -25,8 +25,11 @@
       "identifier": "com.cyber-link.app",
       "windows": {
         "webviewInstallMode": {
-          "type": "downloadBootstrapper",
+          "type": "embedBootstrapper",
           "silent": true
+        },
+        "nsis": {
+          "installMode": "currentUser"
         }
       }
     },

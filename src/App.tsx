@@ -45,6 +45,7 @@ interface DeviceState {
   acAvailable: boolean;
   lightAvailable: boolean;
   connected: boolean;
+  initError?: string;
 }
 
 export default function App() {
@@ -65,13 +66,13 @@ export default function App() {
   const [rotation, setRotation] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
   const syncingRef = useRef(false);
-  const statusText = initFailed
-    ? '离线模式'
-    : actionFailed
+  const statusText = actionFailed
       ? '指令发送失败'
       : device.connected
         ? 'CYBER_NODE: ONLINE'
-        : 'CYBER_NODE: OFFLINE';
+        : device.initError
+          ? `初始化失败: ${device.initError}`
+          : '服务器连接失败';
 
   const syncDevice = async (action: string, value?: number) => {
     if (syncingRef.current) return;
@@ -127,8 +128,10 @@ export default function App() {
         );
       } catch (error) {
         console.error('Failed to initialize Tauri bridge', error);
+        // Surface the initialization error so Windows users do not see a blank-looking shell.
+        const msg = error instanceof Error ? error.message : String(error);
         setInitFailed(true);
-        setDevice(prev => ({ ...prev, connected: false }));
+        setDevice(prev => ({ ...prev, connected: false, initError: msg }));
       }
     })();
 
