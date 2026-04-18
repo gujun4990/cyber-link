@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
+import { appWindow } from '@tauri-apps/api/window';
 import { 
   Monitor, 
   Lightbulb, 
@@ -26,7 +27,7 @@ import {
   Zap,
   Activity
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
 import { applyStateRefresh } from './appState.js';
 import { withTimeout } from './initTimeout.js';
@@ -65,8 +66,6 @@ export default function App() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [isMinimized, setIsMinimized] = useState(false);
-  const [rotation, setRotation] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
   const syncingRef = useRef(false);
   const statusText = actionFailed
@@ -95,12 +94,6 @@ export default function App() {
       syncingRef.current = false;
     }
   };
-
-  // 背景旋转特效速度
-  useEffect(() => {
-    const interval = setInterval(() => setRotation(r => r + 0.5), 50);
-    return () => clearInterval(interval);
-  }, []);
 
   // 实时时间更新
   useEffect(() => {
@@ -159,6 +152,13 @@ export default function App() {
     await syncDevice(ACTIONS.acSetTemp, clampTemp(device.ac.temp, delta));
   };
   const toggleLight = () => void syncDevice(ACTIONS.lightToggle);
+  const hideWindow = async () => {
+    try {
+      await appWindow.hide();
+    } catch (error) {
+      console.error('Failed to hide window', error);
+    }
+  };
   const refreshHaState = async () => {
     if (refreshing) return;
     setRefreshing(true);
@@ -184,14 +184,11 @@ export default function App() {
       {/* 扫描线图层 - 极低强度以确保亮度感 */}
       <div className="fixed inset-0 pointer-events-none z-50 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.02)_50%),linear-gradient(90deg,rgba(255,0,0,0.005),rgba(0,255,0,0.002),rgba(0,0,255,0.005))] bg-[length:100%_4px,3px_100%]" />
 
-      <AnimatePresence>
-        {!isMinimized && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, rotateX: 5 }}
-            animate={{ opacity: 1, scale: 1, rotateX: 0 }}
-            exit={{ opacity: 0, scale: 0.9, rotateX: 10, transition: { duration: 0.2 } }}
-            className="relative w-full max-w-[700px] aspect-[16/10] bg-[#0c2461]/90 backdrop-blur-3xl border-2 border-cyan-400/30 rounded-2xl overflow-visible flex flex-col shadow-[0_0_150px_rgba(6,182,212,0.4),inset_0_0_100px_rgba(0,0,0,0.5)]"
-          >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, rotateX: 5 }}
+        animate={{ opacity: 1, scale: 1, rotateX: 0 }}
+        className="relative w-full max-w-[700px] aspect-[16/10] bg-[#0c2461]/90 backdrop-blur-3xl border-2 border-cyan-400/30 rounded-2xl overflow-visible flex flex-col shadow-[0_0_150px_rgba(6,182,212,0.4),inset_0_0_100px_rgba(0,0,0,0.5)]"
+      >
             {/* 碳纤维/拉丝金属底层纹理 */}
             <div className="absolute inset-0 bg-carbon mix-blend-overlay opacity-40 rounded-2xl pointer-events-none" />
             <div className="absolute inset-0 bg-brushed-metal rounded-2xl pointer-events-none" />
@@ -231,10 +228,7 @@ export default function App() {
                   <RefreshCw size={18} strokeWidth={2.5} className={refreshing ? 'animate-spin' : ''} />
                 </motion.button>
                 <button 
-                  onClick={() => {
-                    console.log('Minimize');
-                    setIsMinimized(true);
-                  }} 
+                  onClick={() => { void hideWindow(); }} 
                   className="w-8 h-8 flex items-center justify-center hover:bg-cyan-400/30 text-white rounded-full transition-all active:scale-75 cursor-pointer"
                 >
                   <Minus size={20} strokeWidth={3} />
@@ -242,8 +236,7 @@ export default function App() {
                 <button 
                   onClick={(e) => {
                     e.stopPropagation();
-                    console.log('X clicked');
-                    setIsMinimized(true);
+                    void hideWindow();
                   }} 
                   className="w-10 h-10 flex items-center justify-center bg-rose-500/10 hover:bg-rose-500/40 hover:text-white text-rose-300 rounded-xl transition-all active:scale-75 cursor-pointer border border-rose-500/30 shadow-[0_0_15px_rgba(244,63,94,0.2)]"
                 >
@@ -424,25 +417,7 @@ export default function App() {
               </div>
               <span className="text-cyan-900/60 tracking-widest font-mono">CYBER_CTL_V09</span>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* 点击感十足的托盘图标 */}
-      {isMinimized && (
-        <motion.button
-          layoutId="tray-icon"
-          initial={{ opacity: 0, scale: 0.5 }}
-          animate={{ opacity: 1, scale: 1 }}
-          whileHover={{ scale: 1.1, boxShadow: "0 0 40px rgba(6,182,212,0.4)" }}
-          whileTap={{ scale: 0.9 }}
-          onClick={() => setIsMinimized(false)}
-          className="fixed bottom-12 right-12 w-20 h-20 bg-[#020617] border-2 border-cyan-500/80 rounded-2xl flex items-center justify-center text-cyan-400 z-[100] cursor-pointer"
-        >
-          <div className="absolute inset-0 rounded-2xl border border-cyan-500/20 animate-pulse" />
-          <Monitor size={40} />
-        </motion.button>
-      )}
+      </motion.div>
     </div>
   );
 }

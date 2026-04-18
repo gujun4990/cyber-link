@@ -647,19 +647,20 @@ mod windows_app {
         mem,
         sync::{Mutex, OnceLock},
     };
-    use tauri::{
-        AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
-    };
+    use tauri::{AppHandle, Manager, State};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+    use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, SetLastError};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, SetWindowLongPtrW, GWLP_WNDPROC, WM_NCDESTROY, WNDPROC,
+        CallWindowProcW, DefWindowProcW, FindWindowW, SetForegroundWindow, SetWindowLongPtrW,
+        ShowWindow, GWLP_WNDPROC, SW_RESTORE, WM_NCDESTROY, WNDPROC,
     };
     use winreg::{enums::*, RegKey};
 
     pub struct SharedState(pub Mutex<DeviceSnapshot>);
 
     static ORIGINAL_WNDPROCS: OnceLock<Mutex<HashMap<isize, isize>>> = OnceLock::new();
+    static INSTANCE_MUTEX: OnceLock<isize> = OnceLock::new();
 
     fn wndproc_store() -> &'static Mutex<HashMap<isize, isize>> {
         ORIGINAL_WNDPROCS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -667,6 +668,41 @@ mod windows_app {
 
     fn hwnd_store_key(hwnd: HWND) -> isize {
         hwnd_store_key_from_raw(hwnd as usize)
+    }
+
+    fn to_wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn try_restore_existing_main_window() -> bool {
+        const INSTANCE_MUTEX_NAME: &str = "Local\\CyberControl_HA_Client_SingleInstance";
+        const MAIN_WINDOW_TITLE: &str = "CyberControl HA Client";
+
+        unsafe {
+            SetLastError(0);
+            let mutex_name = to_wide(INSTANCE_MUTEX_NAME);
+            let mutex = CreateMutexW(std::ptr::null_mut(), 1, mutex_name.as_ptr());
+
+            if mutex == 0 {
+                return false;
+            }
+
+            let _ = INSTANCE_MUTEX.set(mutex);
+
+            if GetLastError() == ERROR_ALREADY_EXISTS {
+                let window_title = to_wide(MAIN_WINDOW_TITLE);
+                let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
+                if hwnd != 0 {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                    let _ = SetForegroundWindow(hwnd);
+                    return true;
+                }
+
+                eprintln!("single-instance mutex exists but main window was not found; continuing startup");
+            }
+        }
+
+        false
     }
 
     fn query_end_session_result() -> LRESULT {
@@ -883,46 +919,6 @@ mod windows_app {
         Ok(next)
     }
 
-    fn tray_menu() -> SystemTrayMenu {
-        SystemTrayMenu::new()
-            .add_item(CustomMenuItem::new("show".to_string(), "打开"))
-            .add_item(CustomMenuItem::new("quit".to_string(), "退出"))
-    }
-
-    fn hide_main_window(app: &tauri::App) {
-        if let Some(window) = app.get_window("main") {
-            let _ = window.hide();
-        }
-    }
-
-    fn show_main_window<R: tauri::Runtime, T: tauri::Manager<R>>(app: &T) {
-        if let Some(window) = app.get_window("main") {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }
-
-    pub fn build_tray() -> SystemTray {
-        SystemTray::new().with_menu(tray_menu())
-    }
-
-    pub fn handle_tray_event(app: &tauri::AppHandle, event: SystemTrayEvent) {
-        if let SystemTrayEvent::MenuItemClick { id, .. } = event {
-            match id.as_str() {
-                "show" => {
-                    if let Some(window) = app.get_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-                "quit" => {
-                    std::process::exit(0);
-                }
-                _ => {}
-            }
-        }
-    }
-
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn handle_windows_message(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         if handle_windows_message_kind(msg) {
@@ -960,24 +956,31 @@ mod windows_app {
     }
 
     pub fn run() {
+        if try_restore_existing_main_window() {
+            return;
+        }
+
         let startup_mode = startup_mode_from_args(std::env::args());
         tauri::Builder::default()
-            .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-                // A second launch should activate the existing window instead of spawning another shell.
-                show_main_window(app);
-            }))
             .manage(SharedState(Mutex::new(initial_snapshot())))
-            .system_tray(build_tray())
-            .on_system_tray_event(handle_tray_event)
             .setup(move |app| {
                 if let Some(window) = app.get_window("main") {
                     if let Err(err) = install_shutdown_hook(&window) {
                         eprintln!("failed to install shutdown hook: {err}");
                     }
                 }
-                match startup_window_action(startup_mode) {
-                    StartupWindowAction::Hide => hide_main_window(app),
-                    StartupWindowAction::Show => show_main_window(app),
+                match startup_mode {
+                    StartupMode::Autostart => {
+                        if let Some(window) = app.get_window("main") {
+                            let _ = window.hide();
+                        }
+                    }
+                    StartupMode::Manual => {
+                        if let Some(window) = app.get_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
                 }
                 Ok(())
             })
