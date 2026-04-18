@@ -431,6 +431,12 @@ where
     Ok(())
 }
 
+fn tolerate_autostart_error(message: &str) -> bool {
+    message.contains("os error 5")
+        || message.contains("Access is denied")
+        || message.contains("拒绝访问")
+}
+
 pub fn autostart_registry_value(exe_path: &Path) -> String {
     format!("\"{}\"", exe_path.display())
 }
@@ -705,8 +711,24 @@ mod windows_app {
         let config = load_config().map_err(|e| e.to_string())?;
         let snapshot = match bootstrap_default_startup(
             || {
-                write_autostart_registry_entry(true).map_err(|e| anyhow!(e))?;
-                verify_autostart_registry_entry().map_err(|e| anyhow!(e))
+                if let Err(err) = write_autostart_registry_entry(true) {
+                    // Some locked-down Windows installs deny HKCU Run writes; startup should still continue.
+                    if tolerate_autostart_error(&err) {
+                        eprintln!("autostart enable skipped: {err}");
+                        return Ok(());
+                    }
+                    return Err(anyhow!(err));
+                }
+
+                if let Err(err) = verify_autostart_registry_entry() {
+                    if tolerate_autostart_error(&err) {
+                        eprintln!("autostart verification skipped: {err}");
+                        return Ok(());
+                    }
+                    return Err(anyhow!(err));
+                }
+
+                Ok(())
             },
             || send_startup_online(&config),
         )
@@ -863,7 +885,7 @@ mod tests {
         build_notification_request, handle_windows_message_kind, hwnd_store_key_from_raw,
         initial_snapshot, notification_timeout, offline_snapshot, query_end_session_result_value,
         resolve_config_path, run_best_effort_three, run_serialized_tray_action,
-        set_window_long_ptr_result,
+        set_window_long_ptr_result, tolerate_autostart_error,
         snapshot_from_home_assistant, snapshot_from_optional_home_assistant, AppConfig,
         DeviceIds, DeviceSnapshot, HaAction,
     };
@@ -1308,6 +1330,13 @@ mod tests {
 
         assert!(result.is_err());
         assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tolerate_autostart_error_allows_windows_access_denied() {
+        assert!(tolerate_autostart_error("拒绝访问 (os error 5)"));
+        assert!(tolerate_autostart_error("Access is denied. (os error 5)"));
+        assert!(!tolerate_autostart_error("registry value mismatch"));
     }
 
     #[tokio::test]
