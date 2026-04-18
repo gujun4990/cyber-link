@@ -31,6 +31,27 @@ test('app source carries initialization errors through to the UI', () => {
   assert.match(appSource, /服务器连接失败/);
 });
 
+test('windows entrypoint restores the existing main window on relaunch', () => {
+  const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+
+  assert.match(mainSource, /try_restore_existing_main_window/);
+  assert.match(mainSource, /static INSTANCE_MUTEX: OnceLock<isize> = OnceLock::new\(\);/);
+  assert.match(mainSource, /CreateMutexW/);
+  assert.match(mainSource, /SetLastError\(0\);/);
+  assert.match(mainSource, /ERROR_ALREADY_EXISTS/);
+  assert.match(mainSource, /FindWindowW/);
+  assert.match(mainSource, /SW_RESTORE/);
+  assert.match(mainSource, /SetForegroundWindow/);
+  assert.match(mainSource, /if try_restore_existing_main_window\(\) \{[\s\S]*return;[\s\S]*\}/);
+});
+
+test('windows entrypoint does not wire a system tray icon', () => {
+  const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+
+  assert.equal(mainSource.includes('.system_tray(build_tray())'), false);
+  assert.equal(mainSource.includes('.on_system_tray_event(handle_tray_event)'), false);
+});
+
 test('release workflow builds frontend before tauri packaging', () => {
   const workflow = readFileSync(
     new URL('../.github/workflows/release.yml', import.meta.url),

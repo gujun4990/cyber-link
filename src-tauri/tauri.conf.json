@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "CyberControl_HA_Client",
-    "version": "0.1.24"
+    "version": "0.1.23"
   },
   "tauri": {
     "allowlist": {
