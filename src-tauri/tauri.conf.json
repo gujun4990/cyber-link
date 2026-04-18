@@ -18,6 +18,10 @@
     },
     "bundle": {
       "active": true,
+      "icon": [
+        "icons/icon.ico",
+        "icons/icon.png"
+      ],
       "identifier": "com.cyber-link.app"
     },
     "windows": [
