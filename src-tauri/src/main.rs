@@ -420,6 +420,42 @@ where
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StartupMode {
+    Manual,
+    Autostart,
+}
+
+pub fn startup_mode_from_args<I, S>(args: I) -> StartupMode
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    if args.into_iter().skip(1).any(|arg| arg.as_ref() == "--autostart") {
+        StartupMode::Autostart
+    } else {
+        StartupMode::Manual
+    }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+async fn bootstrap_startup_mode<E, S, F>(
+    mode: StartupMode,
+    enable_autostart: E,
+    startup_online: S,
+) -> Result<()>
+where
+    E: FnOnce() -> Result<()>,
+    S: FnOnce() -> F,
+    F: Future<Output = Result<()>>,
+{
+    match mode {
+        StartupMode::Manual => Ok(()),
+        StartupMode::Autostart => bootstrap_default_startup(enable_autostart, startup_online).await,
+    }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
 async fn bootstrap_default_startup<E, S, F>(enable_autostart: E, startup_online: S) -> Result<()>
 where
     E: FnOnce() -> Result<()>,
@@ -438,7 +474,7 @@ fn tolerate_autostart_error(message: &str) -> bool {
 }
 
 pub fn autostart_registry_value(exe_path: &Path) -> String {
-    format!("\"{}\"", exe_path.display())
+    format!("\"{}\" --autostart", exe_path.display())
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -709,7 +745,9 @@ mod windows_app {
         state: State<'_, SharedState>,
     ) -> Result<DeviceSnapshot, String> {
         let config = load_config().map_err(|e| e.to_string())?;
-        let snapshot = match bootstrap_default_startup(
+        let startup_mode = startup_mode_from_args(std::env::args());
+        let snapshot = match bootstrap_startup_mode(
+            startup_mode,
             || {
                 if let Err(err) = write_autostart_registry_entry(true) {
                     // Some locked-down Windows installs deny HKCU Run writes; startup should still continue.
@@ -847,6 +885,7 @@ mod windows_app {
     }
 
     pub fn run() {
+        let startup_mode = startup_mode_from_args(std::env::args());
         tauri::Builder::default()
             .manage(SharedState(Mutex::new(initial_snapshot())))
             .system_tray(build_tray())
@@ -857,7 +896,15 @@ mod windows_app {
                         eprintln!("failed to install shutdown hook: {err}");
                     }
                 }
-                hide_main_window(app);
+                match startup_mode {
+                    StartupMode::Autostart => hide_main_window(app),
+                    StartupMode::Manual => {
+                        if let Some(window) = app.get_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                }
                 Ok(())
             })
             .invoke_handler(tauri::generate_handler![
@@ -887,11 +934,12 @@ mod tests {
         resolve_config_path, run_best_effort_three, run_serialized_tray_action,
         set_window_long_ptr_result, tolerate_autostart_error,
         snapshot_from_home_assistant, snapshot_from_optional_home_assistant, AppConfig,
-        DeviceIds, DeviceSnapshot, HaAction,
+        DeviceIds, DeviceSnapshot, HaAction, StartupMode, bootstrap_startup_mode,
+        startup_mode_from_args,
     };
     use anyhow::anyhow;
     use std::io::Cursor;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex as StdMutex};
     use std::time::Duration;
 
@@ -1150,12 +1198,22 @@ mod tests {
     }
 
     #[test]
-    fn builds_registry_value_from_executable_path() {
-        let value = autostart_registry_value(
-            PathBuf::from(r"C:\Program Files\Cyber\cyber-link.exe").as_path(),
-        );
+    fn parses_autostart_mode_from_args() {
+        assert!(matches!(
+            startup_mode_from_args(["CyberControl_HA_Client.exe", "--autostart"]),
+            StartupMode::Autostart
+        ));
+        assert!(matches!(
+            startup_mode_from_args(["CyberControl_HA_Client.exe"]),
+            StartupMode::Manual
+        ));
+    }
 
-        assert_eq!(value, r#""C:\Program Files\Cyber\cyber-link.exe""#);
+    #[test]
+    fn builds_registry_value_from_executable_path() {
+        let value = autostart_registry_value(Path::new(r"C:\Program Files\Cyber\cyber-link.exe"));
+
+        assert_eq!(value, r#""C:\Program Files\Cyber\cyber-link.exe" --autostart"#);
     }
 
     #[test]
@@ -1330,6 +1388,52 @@ mod tests {
 
         assert!(result.is_err());
         assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn manual_startup_skips_boot_automation() {
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let calls_for_enable = Arc::clone(&calls);
+        let calls_for_startup = Arc::clone(&calls);
+
+        bootstrap_startup_mode(
+            StartupMode::Manual,
+            move || {
+                calls_for_enable.lock().unwrap().push("autostart");
+                Ok(())
+            },
+            move || {
+                calls_for_startup.lock().unwrap().push("startup");
+                async { Ok::<(), anyhow::Error>(()) }
+            },
+        )
+        .await
+        .expect("manual startup should succeed");
+
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn autostart_runs_setup_before_startup_action() {
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let calls_for_enable = Arc::clone(&calls);
+        let calls_for_startup = Arc::clone(&calls);
+
+        bootstrap_startup_mode(
+            StartupMode::Autostart,
+            move || {
+                calls_for_enable.lock().unwrap().push("autostart");
+                Ok(())
+            },
+            move || {
+                calls_for_startup.lock().unwrap().push("startup");
+                async { Ok::<(), anyhow::Error>(()) }
+            },
+        )
+        .await
+        .expect("autostart startup should succeed");
+
+        assert_eq!(calls.lock().unwrap().as_slice(), ["autostart", "startup"]);
     }
 
     #[test]
