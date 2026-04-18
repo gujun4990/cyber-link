@@ -123,12 +123,13 @@
 
 ```bash
 npm install
-npm run dev
+npm run tauri:dev
 ```
 
 ### Rust 后端测试
 
 ```bash
+npm run build
 cd src-tauri
 cargo test
 ```
@@ -136,10 +137,10 @@ cargo test
 ## 构建
 
 ```bash
-npm run build
-cd src-tauri
-cargo build --release
+npm run tauri:build
 ```
+
+Windows 安装包和可执行产物默认位于 `src-tauri/target/release/bundle/` 下，具体子目录取决于打包类型。
 
 ## Cargo 依赖
 

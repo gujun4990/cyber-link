@@ -13,7 +13,7 @@ directories = "5"
 tempfile = { version = "3", optional = true }
 
 [features]
-default = ["system-tray"]
+default = ["system-tray", "custom-protocol"]
 system-tray = ["tauri/system-tray"]
 custom-protocol = ["tauri/custom-protocol"]
 
