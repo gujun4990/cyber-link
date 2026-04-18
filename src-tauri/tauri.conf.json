@@ -17,6 +17,7 @@
       "iconPath": "icons/icon.png"
     },
     "bundle": {
+      "active": true,
       "identifier": "com.cyber-link.app"
     },
     "windows": [
