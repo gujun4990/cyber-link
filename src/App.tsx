@@ -29,6 +29,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
 import { applyStateRefresh } from './appState.js';
+import { withTimeout } from './initTimeout.js';
 
 // --- 类型定义 ---
 interface ACState {
@@ -64,6 +65,13 @@ export default function App() {
   const [rotation, setRotation] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
   const syncingRef = useRef(false);
+  const statusText = initFailed
+    ? '离线模式'
+    : actionFailed
+      ? '指令发送失败'
+      : device.connected
+        ? 'CYBER_NODE: ONLINE'
+        : 'CYBER_NODE: OFFLINE';
 
   const syncDevice = async (action: string, value?: number) => {
     if (syncingRef.current) return;
@@ -112,7 +120,11 @@ export default function App() {
       });
 
       try {
-        await invoke<DeviceState>('initialize_app');
+        await withTimeout(
+          invoke<DeviceState>('initialize_app'),
+          8000,
+          'initialize_app timed out',
+        );
       } catch (error) {
         console.error('Failed to initialize Tauri bridge', error);
         setInitFailed(true);
@@ -169,7 +181,7 @@ export default function App() {
                   <Monitor size={16} />
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[11px] font-black tracking-[0.2em] text-white antialiased drop-shadow-[0_0_10px_cyan]">{initFailed ? '服务器连接失败' : (actionFailed ? '指令发送失败' : (device.connected ? 'CYBER_NODE: ONLINE' : 'CYBER_NODE: OFFLINE'))}</span>
+                  <span className="text-[11px] font-black tracking-[0.2em] text-white antialiased drop-shadow-[0_0_10px_cyan]">{statusText}</span>
                 </div>
               </div>
               <div className="flex gap-4 items-center">
@@ -348,15 +360,15 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-6 relative z-10">
-                  <span className="drop-shadow-[0_0_8px_cyan] text-white">
+                    <span className="drop-shadow-[0_0_8px_cyan] text-white">
                     {initFailed ? (
-                      '服务器连接失败'
+                      '离线模式'
                     ) : actionFailed ? (
                       '指令发送失败'
                     ) : device.connected ? (
                       <>当前时间: <span className="font-mono">{currentTime.toLocaleTimeString('zh-CN', { hour12: false })}</span></>
                     ) : (
-                      '离线状态'
+                      '离线模式'
                     )}
                   </span>
                 <span className="text-cyan-900/40">|</span>

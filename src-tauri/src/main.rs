@@ -717,14 +717,17 @@ mod windows_app {
                     Err(err) => {
                         eprintln!("failed to fetch current snapshot: {err}");
                         offline_snapshot(&config)
-                    }
-                },
+                }
+            },
             Err(err) => {
                 eprintln!("startup bootstrap failed: {err}");
                 offline_snapshot(&config)
             }
         };
-        *state.0.lock().map_err(|e| e.to_string())? = snapshot.clone();
+        {
+            let mut state = state.0.lock().map_err(|e| e.to_string())?;
+            *state = snapshot.clone();
+        }
         emit_state_refresh(&app, &snapshot);
         Ok(snapshot)
     }
@@ -737,11 +740,17 @@ mod windows_app {
         value: Option<i32>,
     ) -> Result<DeviceSnapshot, String> {
         let config = load_config().map_err(|e| e.to_string())?;
-        let snapshot = state.0.lock().map_err(|e| e.to_string())?.clone();
+        let snapshot = {
+            let state = state.0.lock().map_err(|e| e.to_string())?;
+            state.clone()
+        };
         let next = apply_action(&config, snapshot, ActionArgs { action, value })
             .await
             .map_err(|e| e.to_string())?;
-        *state.0.lock().map_err(|e| e.to_string())? = next.clone();
+        {
+            let mut state = state.0.lock().map_err(|e| e.to_string())?;
+            *state = next.clone();
+        }
         emit_state_refresh(&app, &next);
         Ok(next)
     }
