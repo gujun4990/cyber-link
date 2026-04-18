@@ -41,6 +41,8 @@ interface DeviceState {
   pcId: string;
   ac: ACState;
   lightOn: boolean;
+  acAvailable: boolean;
+  lightAvailable: boolean;
   connected: boolean;
 }
 
@@ -50,6 +52,8 @@ export default function App() {
     pcId: "终端-05",
     ac: { isOn: true, temp: 16 },
     lightOn: true,
+    acAvailable: false,
+    lightAvailable: false,
     connected: true,
   });
 
@@ -89,7 +93,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let unlisten: null | (() => Promise<void>) = null;
+    let unlisten: null | (() => void) = null;
     void (async () => {
       unlisten = await listen<DeviceState>('state-refresh', (event) => {
         if (event.payload) {
@@ -118,7 +122,7 @@ export default function App() {
 
     return () => {
       if (unlisten) {
-        void unlisten();
+        unlisten();
       }
     };
   }, []);
@@ -308,6 +312,7 @@ export default function App() {
                     <TechToggle 
                       active={device.ac.isOn} 
                       onClick={toggleAC} 
+                      disabled={!device.acAvailable}
                       label="空调核心系统" 
                       subLabel={device.ac.isOn ? "核心运行中" : "已离线"}
                       icon={<Fan className={device.ac.isOn ? 'animate-spin' : ''} size={24}/>} 
@@ -316,6 +321,7 @@ export default function App() {
                     <TechToggle 
                       active={device.lightOn} 
                       onClick={toggleLight} 
+                      disabled={!device.lightAvailable}
                       label="环境氛围照明" 
                       subLabel={device.lightOn ? "强光已开启" : "低能耗状态"}
                       icon={<Lightbulb size={24}/>} 
@@ -404,12 +410,13 @@ function SmallTechStat({ label, value }: { label: string, value: string }) {
   );
 }
 
-function TechToggle({ active, onClick, label, subLabel, icon }: { active: boolean, onClick: () => void, label: string, subLabel: string, icon: React.ReactNode }) {
+function TechToggle({ active, onClick, disabled, label, subLabel, icon }: { active: boolean, onClick: () => void, disabled?: boolean, label: string, subLabel: string, icon: React.ReactNode }) {
   return (
     <motion.button
       whileHover={{ scale: 1.02, x: 4 }}
       whileTap={{ scale: 0.96 }}
       onClick={onClick}
+      disabled={disabled}
       className={`relative w-full p-4 rounded-xl border transition-all duration-700 flex items-center gap-5 overflow-hidden group cursor-pointer shadow-neumorphic ${
         active 
           ? 'bg-cyan-500/15 border-cyan-400/40 text-white shadow-neumorphic-pressed' 

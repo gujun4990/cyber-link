@@ -12,8 +12,10 @@ use std::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceIds {
-    pub ac: String,
-    pub light: String,
+    #[serde(default)]
+    pub ac: Option<String>,
+    #[serde(default)]
+    pub light: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +23,18 @@ pub struct AppConfig {
     pub ha_url: String,
     pub token: String,
     pub pc_entity_id: String,
-    pub entity_id: DeviceIds,
+    #[serde(default)]
+    pub entity_id: Option<DeviceIds>,
+}
+
+impl AppConfig {
+    fn ac_entity_id(&self) -> Option<&str> {
+        self.entity_id.as_ref().and_then(|ids| ids.ac.as_deref())
+    }
+
+    fn light_entity_id(&self) -> Option<&str> {
+        self.entity_id.as_ref().and_then(|ids| ids.light.as_deref())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,6 +51,10 @@ pub struct DeviceSnapshot {
     pub ac: ACState,
     #[serde(rename = "lightOn")]
     pub light_on: bool,
+    #[serde(rename = "acAvailable")]
+    pub ac_available: bool,
+    #[serde(rename = "lightAvailable")]
+    pub light_available: bool,
     pub connected: bool,
 }
 
@@ -83,27 +100,42 @@ impl HaAction {
     pub fn into_request(&self, config: &AppConfig) -> Result<HaRequest> {
         let base = config.ha_url.trim_end_matches('/');
         match self {
-            Self::ToggleAc { on } => Ok(HaRequest {
-                url: format!(
-                    "{base}/api/services/climate/{}",
-                    if *on { "turn_on" } else { "turn_off" }
-                ),
-                body: json!({"entity_id": config.entity_id.ac}),
-            }),
-            Self::SetTemp { temp } => Ok(HaRequest {
-                url: format!("{base}/api/services/climate/set_temperature"),
-                body: json!({
-                    "entity_id": config.entity_id.ac,
-                    "temperature": temp,
-                }),
-            }),
-            Self::ToggleLight { on } => Ok(HaRequest {
-                url: format!(
-                    "{base}/api/services/light/{}",
-                    if *on { "turn_on" } else { "turn_off" }
-                ),
-                body: json!({"entity_id": config.entity_id.light}),
-            }),
+            Self::ToggleAc { on } => {
+                let entity_id = config
+                    .ac_entity_id()
+                    .ok_or_else(|| anyhow!("AC entity is not configured"))?;
+                Ok(HaRequest {
+                    url: format!(
+                        "{base}/api/services/climate/{}",
+                        if *on { "turn_on" } else { "turn_off" }
+                    ),
+                    body: json!({"entity_id": entity_id}),
+                })
+            }
+            Self::SetTemp { temp } => {
+                let entity_id = config
+                    .ac_entity_id()
+                    .ok_or_else(|| anyhow!("AC entity is not configured"))?;
+                Ok(HaRequest {
+                    url: format!("{base}/api/services/climate/set_temperature"),
+                    body: json!({
+                        "entity_id": entity_id,
+                        "temperature": temp,
+                    }),
+                })
+            }
+            Self::ToggleLight { on } => {
+                let entity_id = config
+                    .light_entity_id()
+                    .ok_or_else(|| anyhow!("light entity is not configured"))?;
+                Ok(HaRequest {
+                    url: format!(
+                        "{base}/api/services/light/{}",
+                        if *on { "turn_on" } else { "turn_off" }
+                    ),
+                    body: json!({"entity_id": entity_id}),
+                })
+            }
             Self::StartupOnline | Self::ShutdownSignal => {
                 Err(anyhow!("multi-entity action requires dedicated handler"))
             }
@@ -205,18 +237,30 @@ fn parse_temperature(attributes: &serde_json::Value) -> Option<i32> {
 #[cfg_attr(not(windows), allow(dead_code))]
 fn snapshot_from_ha_state(
     pc_state: &HaEntityState,
-    ac_state: &HaEntityState,
-    light_state: &HaEntityState,
+    ac_state: Option<&HaEntityState>,
+    light_state: Option<&HaEntityState>,
 ) -> DeviceSnapshot {
     let mut snapshot = initial_snapshot();
     snapshot.connected = pc_state.state.eq_ignore_ascii_case("on");
-    snapshot.ac.is_on = !ac_state.state.eq_ignore_ascii_case("off");
+    snapshot.ac_available = ac_state.is_some();
+    snapshot.light_available = light_state.is_some();
 
-    if let Some(temp) = parse_temperature(&ac_state.attributes) {
-        snapshot.ac.temp = temp;
+    if let Some(ac_state) = ac_state {
+        snapshot.ac.is_on = !ac_state.state.eq_ignore_ascii_case("off");
+
+        if let Some(temp) = parse_temperature(&ac_state.attributes) {
+            snapshot.ac.temp = temp;
+        }
+    } else {
+        snapshot.ac.is_on = false;
     }
 
-    snapshot.light_on = light_state.state.eq_ignore_ascii_case("on");
+    if let Some(light_state) = light_state {
+        snapshot.light_on = light_state.state.eq_ignore_ascii_case("on");
+    } else {
+        snapshot.light_on = false;
+    }
+
     snapshot
 }
 
@@ -230,7 +274,24 @@ pub fn snapshot_from_home_assistant(
     let ac_state: HaEntityState = serde_json::from_value(ac_state.clone())?;
     let light_state: HaEntityState = serde_json::from_value(light_state.clone())?;
 
-    Ok(snapshot_from_ha_state(&pc_state, &ac_state, &light_state))
+    Ok(snapshot_from_ha_state(&pc_state, Some(&ac_state), Some(&light_state)))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn snapshot_from_optional_home_assistant(
+    pc_state: &serde_json::Value,
+    ac_state: Option<&serde_json::Value>,
+    light_state: Option<&serde_json::Value>,
+) -> Result<DeviceSnapshot> {
+    let pc_state: HaEntityState = serde_json::from_value(pc_state.clone())?;
+    let ac_state = ac_state.map(|value| serde_json::from_value(value.clone())).transpose()?;
+    let light_state = light_state.map(|value| serde_json::from_value(value.clone())).transpose()?;
+
+    Ok(snapshot_from_ha_state(
+        &pc_state,
+        ac_state.as_ref(),
+        light_state.as_ref(),
+    ))
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -263,41 +324,39 @@ async fn send_ha_notification(config: &AppConfig, state: bool) -> Result<()> {
 
 #[cfg_attr(not(windows), allow(dead_code))]
 async fn send_startup_online(config: &AppConfig) -> Result<()> {
-    run_best_effort_three(
-        || send_ha_notification(config, true),
-        || send_ha_action(config, HaAction::ToggleAc { on: true }),
-        || send_ha_action(config, HaAction::ToggleLight { on: true }),
-    )
-    .await
+    let mut first_err: Option<anyhow::Error> = None;
+
+    if let Err(err) = send_ha_notification(config, true).await {
+        first_err = Some(err);
+    }
+
+    if config.ac_entity_id().is_some() {
+        if let Err(err) = send_ha_action(config, HaAction::ToggleAc { on: true }).await {
+            first_err.get_or_insert(err);
+        }
+    }
+
+    if config.light_entity_id().is_some() {
+        if let Err(err) = send_ha_action(config, HaAction::ToggleLight { on: true }).await {
+            first_err.get_or_insert(err);
+        }
+    }
+
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
 async fn send_shutdown_signal(config: &AppConfig) -> Result<()> {
-    let timeout = notification_timeout(false);
-    run_best_effort_three(
-        || send_ha_notification(config, false),
-        || async {
-            send_ha_request_with_timeout(
-                config,
-                HaAction::ToggleAc { on: false }.into_request(config)?,
-                timeout,
-            )
-            .await
-        },
-        || async {
-            send_ha_request_with_timeout(
-                config,
-                HaAction::ToggleLight { on: false }.into_request(config)?,
-                timeout,
-            )
-            .await
-        },
-    )
-    .await
+    send_ha_notification(config, false).await
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 static TRAY_ACTION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn run_serialized_tray_action<F, Fut>(action: F)
 where
     F: FnOnce() -> Fut,
@@ -311,13 +370,24 @@ where
 #[cfg_attr(not(windows), allow(dead_code))]
 async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceSnapshot> {
     let pc_state = fetch_ha_entity_state(config, &config.pc_entity_id).await?;
-    let ac_state = fetch_ha_entity_state(config, &config.entity_id.ac).await?;
-    let light_state = fetch_ha_entity_state(config, &config.entity_id.light).await?;
+    let ac_state = match config.ac_entity_id() {
+        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
+        None => None,
+    };
+    let light_state = match config.light_entity_id() {
+        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
+        None => None,
+    };
 
-    Ok(snapshot_from_ha_state(&pc_state, &ac_state, &light_state))
+    Ok(snapshot_from_ha_state(
+        &pc_state,
+        ac_state.as_ref(),
+        light_state.as_ref(),
+    ))
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 async fn run_best_effort_three<F1, F2, F3, Fut1, Fut2, Fut3>(
     first: F1,
     second: F2,
@@ -375,14 +445,27 @@ fn initial_snapshot() -> DeviceSnapshot {
             temp: 16,
         },
         light_on: true,
+        ac_available: true,
+        light_available: true,
         connected: true,
     }
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-fn offline_snapshot() -> DeviceSnapshot {
+fn offline_snapshot(config: &AppConfig) -> DeviceSnapshot {
     let mut snapshot = initial_snapshot();
     snapshot.connected = false;
+    snapshot.ac_available = config.ac_entity_id().is_some();
+    snapshot.light_available = config.light_entity_id().is_some();
+
+    if !snapshot.ac_available {
+        snapshot.ac.is_on = false;
+    }
+
+    if !snapshot.light_available {
+        snapshot.light_on = false;
+    }
+
     snapshot
 }
 
@@ -394,6 +477,9 @@ async fn apply_action(
 ) -> Result<DeviceSnapshot> {
     match args.action.as_str() {
         "ac_toggle" => {
+            if config.ac_entity_id().is_none() {
+                return Ok(snapshot);
+            }
             let next = !snapshot.ac.is_on;
             send_ha_request(
                 config,
@@ -403,11 +489,17 @@ async fn apply_action(
             snapshot.ac.is_on = next;
         }
         "ac_set_temp" => {
+            if config.ac_entity_id().is_none() {
+                return Ok(snapshot);
+            }
             let temp = args.value.ok_or_else(|| anyhow!("missing temperature"))?;
             send_ha_request(config, HaAction::SetTemp { temp }.into_request(config)?).await?;
             snapshot.ac.temp = temp;
         }
         "light_toggle" => {
+            if config.light_entity_id().is_none() {
+                return Ok(snapshot);
+            }
             let next = !snapshot.light_on;
             send_ha_request(
                 config,
@@ -418,13 +510,23 @@ async fn apply_action(
         }
         "startup_online" => {
             send_startup_online(config).await?;
-            snapshot.ac.is_on = true;
-            snapshot.light_on = true;
+            snapshot.ac_available = config.ac_entity_id().is_some();
+            snapshot.light_available = config.light_entity_id().is_some();
+
+            if snapshot.ac_available {
+                snapshot.ac.is_on = true;
+            } else {
+                snapshot.ac.is_on = false;
+            }
+
+            if snapshot.light_available {
+                snapshot.light_on = true;
+            } else {
+                snapshot.light_on = false;
+            }
         }
         "shutdown_signal" => {
             send_shutdown_signal(config).await?;
-            snapshot.ac.is_on = false;
-            snapshot.light_on = false;
         }
         _ => return Err(anyhow!("unsupported action: {}", args.action)),
     }
@@ -433,6 +535,7 @@ async fn apply_action(
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 async fn apply_tray_toggle<T>(
     result: Result<T>,
     mut snapshot: DeviceSnapshot,
@@ -609,16 +712,16 @@ mod windows_app {
         )
         .await
         {
-            Ok(()) => match fetch_current_snapshot(&config).await {
-                Ok(snapshot) => snapshot,
-                Err(err) => {
-                    eprintln!("failed to fetch current snapshot: {err}");
-                    offline_snapshot()
-                }
-            },
+                Ok(()) => match fetch_current_snapshot(&config).await {
+                    Ok(snapshot) => snapshot,
+                    Err(err) => {
+                        eprintln!("failed to fetch current snapshot: {err}");
+                        offline_snapshot(&config)
+                    }
+                },
             Err(err) => {
                 eprintln!("startup bootstrap failed: {err}");
-                offline_snapshot()
+                offline_snapshot(&config)
             }
         };
         *state.0.lock().map_err(|e| e.to_string())? = snapshot.clone();
@@ -645,12 +748,7 @@ mod windows_app {
 
     fn tray_menu() -> SystemTrayMenu {
         SystemTrayMenu::new()
-            .add_item(CustomMenuItem::new("show".to_string(), "打开控制面板"))
-            .add_item(CustomMenuItem::new("ac_on".to_string(), "快速启动空调"))
-            .add_item(CustomMenuItem::new(
-                "light_toggle".to_string(),
-                "快速开关灯",
-            ))
+            .add_item(CustomMenuItem::new("show".to_string(), "打开"))
             .add_item(CustomMenuItem::new("quit".to_string(), "退出"))
     }
 
@@ -672,69 +770,6 @@ mod windows_app {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
-                }
-                "ac_on" => {
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        run_serialized_tray_action(|| async move {
-                            let state = app.state::<SharedState>();
-                            let config = match load_config() {
-                                Ok(config) => config,
-                                Err(_) => return,
-                            };
-                            let snapshot = match state.0.lock() {
-                                Ok(guard) => guard.clone(),
-                                Err(_) => return,
-                            };
-                            if let Ok(next) = apply_tray_toggle(
-                                send_ha_action(&config, HaAction::ToggleAc { on: true }).await,
-                                snapshot,
-                                |snapshot| {
-                                    snapshot.ac.is_on = true;
-                                },
-                            )
-                            .await
-                            {
-                                if let Ok(mut guard) = state.0.lock() {
-                                    *guard = next.clone();
-                                }
-                                emit_state_refresh(&app, &next);
-                            }
-                        })
-                        .await;
-                    });
-                }
-                "light_toggle" => {
-                    let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        run_serialized_tray_action(|| async move {
-                            let state = app.state::<SharedState>();
-                            let config = match load_config() {
-                                Ok(config) => config,
-                                Err(_) => return,
-                            };
-                            let snapshot = match state.0.lock() {
-                                Ok(guard) => guard.clone(),
-                                Err(_) => return,
-                            };
-                            let desired = !snapshot.light_on;
-                            if let Ok(next) = apply_tray_toggle(
-                                send_ha_action(&config, HaAction::ToggleLight { on: desired }).await,
-                                snapshot,
-                                move |snapshot| {
-                                    snapshot.light_on = desired;
-                                },
-                            )
-                            .await
-                            {
-                                if let Ok(mut guard) = state.0.lock() {
-                                    *guard = next.clone();
-                                }
-                                emit_state_refresh(&app, &next);
-                            }
-                        })
-                        .await;
-                    });
                 }
                 "quit" => {
                     std::process::exit(0);
@@ -820,7 +855,8 @@ mod tests {
         initial_snapshot, notification_timeout, offline_snapshot, query_end_session_result_value,
         resolve_config_path, run_best_effort_three, run_serialized_tray_action,
         set_window_long_ptr_result,
-        snapshot_from_home_assistant, AppConfig, DeviceIds, DeviceSnapshot, HaAction,
+        snapshot_from_home_assistant, snapshot_from_optional_home_assistant, AppConfig,
+        DeviceIds, DeviceSnapshot, HaAction,
     };
     use anyhow::anyhow;
     use std::io::Cursor;
@@ -916,11 +952,27 @@ mod tests {
         assert_eq!(config.pc_entity_id, "input_boolean.pc_05_online");
         assert_eq!(
             config.entity_id,
-            DeviceIds {
-                ac: "climate.office_ac".to_string(),
-                light: "light.office_light".to_string(),
-            }
+            Some(DeviceIds {
+                ac: Some("climate.office_ac".to_string()),
+                light: Some("light.office_light".to_string()),
+            })
         );
+    }
+
+    #[test]
+    fn parses_config_when_ac_and_light_are_missing() {
+        let json = r#"{
+            "ha_url": "https://ha.example.local",
+            "token": "secret",
+            "pc_entity_id": "input_boolean.pc_05_online"
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).expect("config should parse");
+
+        assert_eq!(config.pc_entity_id, "input_boolean.pc_05_online");
+        assert_eq!(config.entity_id, None);
+        assert_eq!(config.ac_entity_id(), None);
+        assert_eq!(config.light_entity_id(), None);
     }
 
     #[test]
@@ -929,10 +981,10 @@ mod tests {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
             pc_entity_id: "input_boolean.pc_05_online".into(),
-            entity_id: DeviceIds {
-                ac: "climate.office_ac".into(),
-                light: "light.office_light".into(),
-            },
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
         };
 
         let request = HaAction::ToggleAc { on: true }
@@ -950,15 +1002,15 @@ mod tests {
     }
 
     #[test]
-    fn builds_shutdown_signal_request() {
+    fn builds_air_conditioning_turn_off_request() {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
             pc_entity_id: "input_boolean.pc_05_online".into(),
-            entity_id: DeviceIds {
-                ac: "climate.office_ac".into(),
-                light: "light.office_light".into(),
-            },
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
         };
 
         let request = HaAction::ToggleAc { on: false }
@@ -969,6 +1021,34 @@ mod tests {
             request.url,
             "https://ha.example.local/api/services/climate/turn_off"
         );
+        assert_eq!(
+            request.body,
+            serde_json::json!({"entity_id": "climate.office_ac"})
+        );
+    }
+
+    #[test]
+    fn builds_shutdown_signal_request() {
+        let config = AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: "input_boolean.pc_05_online".into(),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
+        };
+
+        let request = build_notification_request(&config, false).expect("notification request");
+
+        assert_eq!(
+            request.url,
+            "https://ha.example.local/api/services/input_boolean/turn_off"
+        );
+        assert_eq!(
+            request.body,
+            serde_json::json!({"entity_id": "input_boolean.pc_05_online"})
+        );
     }
 
     #[test]
@@ -977,10 +1057,10 @@ mod tests {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
             pc_entity_id: "input_boolean.pc_05_online".into(),
-            entity_id: DeviceIds {
-                ac: "climate.office_ac".into(),
-                light: "light.office_light".into(),
-            },
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
         };
 
         let request = build_notification_request(&config, true).expect("notification request");
@@ -992,6 +1072,29 @@ mod tests {
         assert_eq!(
             request.body,
             serde_json::json!({"entity_id": "input_boolean.pc_05_online"})
+        );
+    }
+
+    #[test]
+    fn builds_light_turn_off_request() {
+        let config = AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: "input_boolean.pc_05_online".into(),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
+        };
+
+        let request = HaAction::ToggleLight { on: false }
+            .into_request(&config)
+            .expect("request");
+
+        assert_eq!(request.url, "https://ha.example.local/api/services/light/turn_off");
+        assert_eq!(
+            request.body,
+            serde_json::json!({"entity_id": "light.office_light"})
         );
     }
 
@@ -1218,11 +1321,20 @@ mod tests {
 
     #[test]
     fn offline_snapshot_marks_disconnected() {
-        let snapshot = offline_snapshot();
+        let config = AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: "input_boolean.pc_05_online".into(),
+            entity_id: None,
+        };
+
+        let snapshot = offline_snapshot(&config);
 
         assert!(!snapshot.connected);
-        assert!(snapshot.ac.is_on);
-        assert_eq!(snapshot.light_on, true);
+        assert!(!snapshot.ac_available);
+        assert!(!snapshot.light_available);
+        assert!(!snapshot.ac.is_on);
+        assert!(!snapshot.light_on);
     }
 
     #[test]
@@ -1246,8 +1358,27 @@ mod tests {
             .expect("snapshot should build");
 
         assert!(snapshot.connected);
+        assert!(snapshot.ac_available);
+        assert!(snapshot.light_available);
         assert!(snapshot.ac.is_on);
         assert_eq!(snapshot.ac.temp, 24);
+        assert!(!snapshot.light_on);
+    }
+
+    #[test]
+    fn builds_snapshot_when_ac_and_light_are_missing() {
+        let pc_state = serde_json::json!({
+            "state": "on",
+            "attributes": {}
+        });
+
+        let snapshot = snapshot_from_optional_home_assistant(&pc_state, None, None)
+            .expect("snapshot should build");
+
+        assert!(snapshot.connected);
+        assert!(!snapshot.ac_available);
+        assert!(!snapshot.light_available);
+        assert!(!snapshot.ac.is_on);
         assert!(!snapshot.light_on);
     }
 

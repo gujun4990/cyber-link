@@ -20,7 +20,7 @@
 ## 项目功能
 
 - 默认隐藏到系统托盘
-- 通过 Home Assistant 控制空调和灯光
+- 通过 Home Assistant 控制空调和灯光（可选配置）
 - 通过 `input_boolean` 上报本机在线/离线状态
 - 拦截 Windows 关机消息并发送离线通知
 - 通过后端快照和 `state-refresh` 事件同步前端 UI
@@ -60,7 +60,7 @@
 - 启动后默认隐藏
 - 常驻系统托盘
 - 在 `WM_QUERYENDSESSION` 前发送关机离线通知
-- 关机时尝试关闭空调和灯光
+- 关机时仅发送本机离线状态
 
 ## 配置文件
 
@@ -83,8 +83,10 @@
 - `ha_url`：Home Assistant 基础地址
 - `token`：长期访问令牌
 - `pc_entity_id`：表示本机在线/离线的 `input_boolean`
-- `entity_id.ac`：空调实体
-- `entity_id.light`：灯光实体
+- `entity_id.ac`：空调实体，可省略
+- `entity_id.light`：灯光实体，可省略
+
+如果 `entity_id.ac` 或 `entity_id.light` 未配置，对应功能会在前端禁用，并且后端不会发送相关 Home Assistant 请求。
 
 ### Home Assistant 实体示例
 
