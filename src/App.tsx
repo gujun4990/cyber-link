@@ -179,15 +179,12 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 overflow-hidden">
-      
-      {/* 扫描线图层 - 极低强度以确保亮度感 */}
-      <div className="fixed inset-0 pointer-events-none z-50 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.02)_50%),linear-gradient(90deg,rgba(255,0,0,0.005),rgba(0,255,0,0.002),rgba(0,0,255,0.005))] bg-[length:100%_4px,3px_100%]" />
-
+    <>
       <motion.div
         initial={{ opacity: 0, scale: 0.95, rotateX: 5 }}
         animate={{ opacity: 1, scale: 1, rotateX: 0 }}
-        className="relative w-full max-w-[700px] aspect-[16/10] bg-[#0c2461]/90 backdrop-blur-3xl border-2 border-cyan-400/30 rounded-2xl overflow-visible flex flex-col shadow-[0_0_150px_rgba(6,182,212,0.4),inset_0_0_100px_rgba(0,0,0,0.5)]"
+        style={{ width: 'min(700px, calc(100vw - 32px), calc((100vh - 32px) * 1.6))' }}
+        className="fixed inset-0 m-auto aspect-[16/10] bg-[#0c2461]/90 backdrop-blur-3xl border-2 border-cyan-400/30 rounded-2xl overflow-visible flex flex-col shadow-[0_0_150px_rgba(6,182,212,0.4),inset_0_0_100px_rgba(0,0,0,0.5)]"
       >
             {/* 碳纤维/拉丝金属底层纹理 */}
             <div className="absolute inset-0 bg-carbon mix-blend-overlay opacity-40 rounded-2xl pointer-events-none" />
@@ -418,7 +415,7 @@ export default function App() {
               <span className="text-cyan-900/60 tracking-widest font-mono">CYBER_CTL_V09</span>
             </div>
       </motion.div>
-    </div>
+    </>
   );
 }
 

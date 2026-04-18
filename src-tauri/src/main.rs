@@ -1390,6 +1390,25 @@ mod tests {
     }
 
     #[test]
+    fn startup_path_returns_single_visible_main_window() {
+        assert_eq!(startup_window_action(StartupMode::Manual), StartupWindowAction::Show);
+        assert_eq!(startup_window_action(StartupMode::Autostart), StartupWindowAction::Hide);
+
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri config should parse");
+        let windows = config
+            .get("tauri")
+            .and_then(|tauri| tauri.get("windows"))
+            .and_then(|windows| windows.as_array())
+            .expect("tauri config should declare windows");
+
+        assert_eq!(windows.len(), 1, "app should keep a single main window definition");
+        let main_window = windows.first().expect("tauri config should declare one window");
+        assert_eq!(main_window.get("label").and_then(|label| label.as_str()), Some("main"));
+        assert_eq!(main_window.get("visible").and_then(|visible| visible.as_bool()), Some(false));
+    }
+
+    #[test]
     fn main_window_title_matches_tauri_config() {
         let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
             .expect("tauri config should parse");
