@@ -692,7 +692,7 @@ mod windows_app {
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 let window_title = to_wide(MAIN_WINDOW_TITLE);
                 let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
-                if hwnd != 0 {
+                if !hwnd.is_null() {
                     let _ = ShowWindow(hwnd, SW_RESTORE);
                     let _ = SetForegroundWindow(hwnd);
                     return true;
