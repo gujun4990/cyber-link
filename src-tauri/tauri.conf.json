@@ -35,8 +35,7 @@
         "label": "main",
         "title": "CyberControl HA Client",
         "visible": false,
-        "resizable": true,
-        "transparent": true
+        "resizable": true
       }
     ]
   }
