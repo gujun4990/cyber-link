@@ -61,6 +61,9 @@ export default function App() {
 
   const [initFailed, setInitFailed] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [isMinimized, setIsMinimized] = useState(false);
   const [rotation, setRotation] = useState(0);
@@ -68,7 +71,11 @@ export default function App() {
   const syncingRef = useRef(false);
   const statusText = actionFailed
       ? '指令发送失败'
-      : device.connected
+      : refreshFailed
+        ? refreshError
+          ? `刷新失败: ${refreshError}`
+          : '刷新失败'
+        : device.connected
         ? 'CYBER_NODE: ONLINE'
         : device.initError
           ? `初始化失败: ${device.initError}`
@@ -106,17 +113,21 @@ export default function App() {
     void (async () => {
       unlisten = await listen<DeviceState>('state-refresh', (event) => {
         if (event.payload) {
-          const next = applyStateRefresh(
-            {
-              device,
-              initFailed,
-              actionFailed,
-            },
-            event.payload,
-          );
+              const next = applyStateRefresh(
+                {
+                  device,
+                  initFailed,
+                  actionFailed,
+                  refreshFailed,
+                  refreshError,
+                },
+                event.payload,
+              );
           setDevice(next.device);
           setInitFailed(next.initFailed);
           setActionFailed(next.actionFailed);
+          setRefreshFailed(next.refreshFailed);
+          setRefreshError(next.refreshError);
         }
       });
 
@@ -148,6 +159,24 @@ export default function App() {
     await syncDevice(ACTIONS.acSetTemp, clampTemp(device.ac.temp, delta));
   };
   const toggleLight = () => void syncDevice(ACTIONS.lightToggle);
+  const refreshHaState = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await withTimeout(
+        invoke<DeviceState>('refresh_ha_state'),
+        8000,
+        'refresh_ha_state timed out',
+      );
+    } catch (error) {
+        console.error('Failed to refresh HA state', error);
+        const msg = error instanceof Error ? error.message : String(error);
+        setRefreshFailed(true);
+        setRefreshError(msg);
+    } finally {
+      setRefreshing(false);
+      }
+  };
 
   return (
     <div className="min-h-screen bg-[#050c2d] text-cyan-200 font-mono selection:bg-cyan-500/30 overflow-hidden flex items-center justify-center p-4">
@@ -188,6 +217,19 @@ export default function App() {
                 </div>
               </div>
               <div className="flex gap-4 items-center">
+                <motion.button 
+                  whileHover={{ rotate: 180, scale: 1.1, color: '#22d3ee' }}
+                  whileTap={{ scale: 0.9 }}
+                  disabled={refreshing}
+                  onClick={() => {
+                    console.log('Refresh Data');
+                    void refreshHaState();
+                  }} 
+                  className={`w-8 h-8 flex items-center justify-center text-white/60 hover:text-cyan-400 transition-colors cursor-pointer ${refreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="刷新系统数据"
+                >
+                  <RefreshCw size={18} strokeWidth={2.5} className={refreshing ? 'animate-spin' : ''} />
+                </motion.button>
                 <button 
                   onClick={() => {
                     console.log('Minimize');

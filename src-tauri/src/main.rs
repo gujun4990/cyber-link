@@ -169,33 +169,20 @@ struct ActionArgs {
     value: Option<i32>,
 }
 
-pub fn resolve_config_path(current_dir: &Path, executable_dir: &Path) -> Result<PathBuf> {
-    let cwd = current_dir.join("config.json");
-    if cwd.exists() {
-        return Ok(cwd);
-    }
-
-    let exe = executable_dir.join("config.json");
-    if exe.exists() {
-        return Ok(exe);
-    }
-
-    Err(anyhow!(
-        "config.json not found in current or executable directory"
-    ))
+pub fn resolve_user_config_path_from_base_dir(base_local_dir: &Path) -> PathBuf {
+    base_local_dir
+        .join("CyberControl_HA_Client")
+        .join("config.json")
 }
 
-fn config_path() -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    let exe_dir = std::env::current_exe()?
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or(cwd.clone());
-    resolve_config_path(&cwd, &exe_dir)
+pub fn resolve_user_config_path() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow!("failed to resolve user directory"))?;
+    Ok(resolve_user_config_path_from_base_dir(base.data_local_dir()))
 }
 
 pub fn load_config() -> Result<AppConfig> {
-    let path = config_path()?;
+    let path = resolve_user_config_path()?;
     let raw = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&raw)?)
 }
@@ -426,6 +413,13 @@ pub enum StartupMode {
     Autostart,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StartupWindowAction {
+    Show,
+    Hide,
+}
+
 pub fn startup_mode_from_args<I, S>(args: I) -> StartupMode
 where
     I: IntoIterator<Item = S>,
@@ -436,6 +430,40 @@ where
     } else {
         StartupMode::Manual
     }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn startup_window_action(mode: StartupMode) -> StartupWindowAction {
+    match mode {
+        StartupMode::Manual => StartupWindowAction::Show,
+        StartupMode::Autostart => StartupWindowAction::Hide,
+    }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+async fn retry_startup_task<T, F, Fut>(max_attempts: usize, mut task: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let mut last_err = None;
+    for _ in 0..max_attempts {
+        match task().await {
+            Ok(value) => return Ok(value),
+            Err(err) => last_err = Some(err),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow!("startup task failed")))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+async fn refresh_snapshot_with_retry(config: &AppConfig) -> Result<DeviceSnapshot> {
+    retry_startup_task(3, || {
+        let config = config.clone();
+        async move { fetch_current_snapshot(&config).await }
+    })
+    .await
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -746,49 +774,89 @@ mod windows_app {
     ) -> Result<DeviceSnapshot, String> {
         let config = load_config().map_err(|e| e.to_string())?;
         let startup_mode = startup_mode_from_args(std::env::args());
-        let snapshot = match bootstrap_startup_mode(
-            startup_mode,
-            || {
-                if let Err(err) = write_autostart_registry_entry(true) {
-                    // Some locked-down Windows installs deny HKCU Run writes; startup should still continue.
-                    if tolerate_autostart_error(&err) {
-                        eprintln!("autostart enable skipped: {err}");
-                        return Ok(());
-                    }
-                    return Err(anyhow!(err));
-                }
-
-                if let Err(err) = verify_autostart_registry_entry() {
-                    if tolerate_autostart_error(&err) {
-                        eprintln!("autostart verification skipped: {err}");
-                        return Ok(());
-                    }
-                    return Err(anyhow!(err));
-                }
-
-                Ok(())
-            },
-            || send_startup_online(&config),
-        )
-        .await
-        {
-                Ok(()) => match fetch_current_snapshot(&config).await {
-                    Ok(snapshot) => snapshot,
-                    Err(err) => {
-                        eprintln!("failed to fetch current snapshot: {err}");
-                        offline_snapshot(&config)
-                }
-            },
-            Err(err) => {
-                eprintln!("startup bootstrap failed: {err}");
-                offline_snapshot(&config)
-            }
-        };
+        let snapshot = offline_snapshot(&config);
         {
             let mut state = state.0.lock().map_err(|e| e.to_string())?;
             *state = snapshot.clone();
         }
         emit_state_refresh(&app, &snapshot);
+
+        let app_for_task = app.clone();
+        let config_for_task = config.clone();
+        tauri::async_runtime::spawn(async move {
+            let result = retry_startup_task(3, || {
+                let config = config_for_task.clone();
+                async move {
+                    if matches!(startup_mode, StartupMode::Autostart) {
+                        bootstrap_startup_mode(
+                            StartupMode::Autostart,
+                            || {
+                                if let Err(err) = write_autostart_registry_entry(true) {
+                                    // Some locked-down Windows installs deny HKCU Run writes; startup should still continue.
+                                    if tolerate_autostart_error(&err) {
+                                        eprintln!("autostart enable skipped: {err}");
+                                        return Ok(());
+                                    }
+                                    return Err(anyhow!(err));
+                                }
+
+                                if let Err(err) = verify_autostart_registry_entry() {
+                                    if tolerate_autostart_error(&err) {
+                                        eprintln!("autostart verification skipped: {err}");
+                                        return Ok(());
+                                    }
+                                    return Err(anyhow!(err));
+                                }
+
+                                Ok(())
+                            },
+                            || send_startup_online(&config),
+                        )
+                        .await?;
+                    }
+
+                    fetch_current_snapshot(&config).await
+                }
+            })
+            .await;
+
+            let snapshot = match result {
+                Ok(snapshot) => snapshot,
+                Err(err) => {
+                    eprintln!("startup bootstrap failed: {err}");
+                    offline_snapshot(&config_for_task)
+                }
+            };
+
+            let shared = app_for_task.state::<SharedState>();
+            if let Ok(mut state) = shared.0.lock() {
+                *state = snapshot.clone();
+            }
+            emit_state_refresh(&app_for_task, &snapshot);
+        });
+
+        Ok(snapshot)
+    }
+
+    #[tauri::command]
+    pub async fn refresh_ha_state(
+        app: AppHandle,
+        state: State<'_, SharedState>,
+    ) -> Result<DeviceSnapshot, String> {
+        let config = load_config().map_err(|e| e.to_string())?;
+        let snapshot = refresh_snapshot_with_retry(&config)
+            .await
+            .map_err(|err| {
+                eprintln!("failed to refresh HA state: {err}");
+                err.to_string()
+            })?;
+
+        {
+            let mut state = state.0.lock().map_err(|e| e.to_string())?;
+            *state = snapshot.clone();
+        }
+        emit_state_refresh(&app, &snapshot);
+
         Ok(snapshot)
     }
 
@@ -824,6 +892,13 @@ mod windows_app {
     fn hide_main_window(app: &tauri::App) {
         if let Some(window) = app.get_window("main") {
             let _ = window.hide();
+        }
+    }
+
+    fn show_main_window<R: tauri::Runtime, T: tauri::Manager<R>>(app: &T) {
+        if let Some(window) = app.get_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
         }
     }
 
@@ -887,28 +962,28 @@ mod windows_app {
     pub fn run() {
         let startup_mode = startup_mode_from_args(std::env::args());
         tauri::Builder::default()
+            .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+                // A second launch should activate the existing window instead of spawning another shell.
+                show_main_window(app);
+            }))
             .manage(SharedState(Mutex::new(initial_snapshot())))
             .system_tray(build_tray())
             .on_system_tray_event(handle_tray_event)
-            .setup(|app| {
+            .setup(move |app| {
                 if let Some(window) = app.get_window("main") {
                     if let Err(err) = install_shutdown_hook(&window) {
                         eprintln!("failed to install shutdown hook: {err}");
                     }
                 }
-                match startup_mode {
-                    StartupMode::Autostart => hide_main_window(app),
-                    StartupMode::Manual => {
-                        if let Some(window) = app.get_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
+                match startup_window_action(startup_mode) {
+                    StartupWindowAction::Hide => hide_main_window(app),
+                    StartupWindowAction::Show => show_main_window(app),
                 }
                 Ok(())
             })
             .invoke_handler(tauri::generate_handler![
                 initialize_app,
+                refresh_ha_state,
                 handle_ha_action,
                 set_autostart_enabled
             ])
@@ -931,11 +1006,12 @@ mod tests {
         apply_tray_toggle, autostart_registry_value, bootstrap_default_startup,
         build_notification_request, handle_windows_message_kind, hwnd_store_key_from_raw,
         initial_snapshot, notification_timeout, offline_snapshot, query_end_session_result_value,
-        resolve_config_path, run_best_effort_three, run_serialized_tray_action,
-        set_window_long_ptr_result, tolerate_autostart_error,
+        run_best_effort_three, run_serialized_tray_action,
+        resolve_user_config_path_from_base_dir, retry_startup_task, set_window_long_ptr_result,
+        refresh_snapshot_with_retry, startup_window_action, tolerate_autostart_error,
         snapshot_from_home_assistant, snapshot_from_optional_home_assistant, AppConfig,
-        DeviceIds, DeviceSnapshot, HaAction, StartupMode, bootstrap_startup_mode,
-        startup_mode_from_args,
+        DeviceIds, DeviceSnapshot, HaAction, StartupMode, StartupWindowAction,
+        bootstrap_startup_mode, startup_mode_from_args,
     };
     use anyhow::anyhow;
     use std::io::Cursor;
@@ -1184,17 +1260,50 @@ mod tests {
     }
 
     #[test]
-    fn resolves_config_from_executable_directory_when_working_dir_missing() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let cwd = tmp.path().join("working");
-        let exe_dir = tmp.path().join("install");
-        std::fs::create_dir_all(&cwd).expect("cwd");
-        std::fs::create_dir_all(&exe_dir).expect("exe dir");
-        std::fs::write(exe_dir.join("config.json"), "{}").expect("config");
+    fn resolves_config_path_from_user_local_app_data() {
+        let resolved = resolve_user_config_path_from_base_dir(Path::new(
+            r"C:\Users\Alice\AppData\Local",
+        ));
 
-        let resolved = resolve_config_path(&cwd, &exe_dir).expect("resolved path");
+        assert_eq!(
+            resolved,
+            PathBuf::from(r"C:\Users\Alice\AppData\Local")
+                .join("CyberControl_HA_Client")
+                .join("config.json")
+        );
+    }
 
-        assert_eq!(resolved, exe_dir.join("config.json"));
+    #[tokio::test]
+    async fn startup_retry_helper_retries_three_times() {
+        let attempts = Arc::new(StdMutex::new(0));
+        let attempts_for_call = Arc::clone(&attempts);
+
+        let result = retry_startup_task(3, move || {
+            let attempts_for_call = Arc::clone(&attempts_for_call);
+            async move {
+                let mut guard = attempts_for_call.lock().unwrap();
+                *guard += 1;
+                Err::<(), anyhow::Error>(anyhow!("temporary failure"))
+            }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(*attempts.lock().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn refresh_snapshot_with_retry_surfaces_failure() {
+        let config = AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: "input_boolean.pc_05_online".into(),
+            entity_id: None,
+        };
+
+        let result = refresh_snapshot_with_retry(&config).await;
+
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1207,6 +1316,16 @@ mod tests {
             startup_mode_from_args(["CyberControl_HA_Client.exe"]),
             StartupMode::Manual
         ));
+    }
+
+    #[test]
+    fn manual_startup_shows_the_main_window() {
+        assert_eq!(startup_window_action(StartupMode::Manual), StartupWindowAction::Show);
+    }
+
+    #[test]
+    fn autostart_hides_the_main_window() {
+        assert_eq!(startup_window_action(StartupMode::Autostart), StartupWindowAction::Hide);
     }
 
     #[test]

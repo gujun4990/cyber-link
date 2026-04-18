@@ -3,5 +3,7 @@ export function applyStateRefresh(_current, snapshot) {
     device: snapshot,
     initFailed: false,
     actionFailed: false,
+    refreshFailed: false,
+    refreshError: null,
   };
 }
