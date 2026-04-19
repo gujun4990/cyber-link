@@ -1072,7 +1072,7 @@ mod windows_app {
                         }
                     }
                     StartupMode::Manual => {
-                        show_main_window(app);
+                        show_main_window(&app.handle());
                     }
                 }
                 Ok(())
