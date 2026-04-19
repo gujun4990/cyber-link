@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
-import { appWindow } from '@tauri-apps/api/window';
+import { appWindow, LogicalSize } from '@tauri-apps/api/window';
 import {
   ChevronDown,
   ChevronUp,
@@ -95,6 +95,9 @@ export default function App() {
         setRefreshError(next.refreshError);
         setHasLoadedState(true);
       });
+
+      await appWindow.setSize(new LogicalSize(windowSize.width, windowSize.height));
+      await appWindow.show();
 
       try {
         await withTimeout(
@@ -222,7 +225,7 @@ export default function App() {
         layoutId="main-dashboard"
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="fixed inset-0 m-auto border-[1.5px] border-white/10 rounded-xl overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.8),0_0_20px_rgba(6,182,212,0.1)] antialiased"
+        className="fixed inset-0 m-auto border-[1.5px] border-white/10 overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.8),0_0_20px_rgba(6,182,212,0.1)] antialiased"
         style={{
           width: windowSize.width,
           height: windowSize.height,
@@ -239,7 +242,6 @@ export default function App() {
           {/* 顶栏支持拖拽，右侧按钮区必须禁用拖拽。 */}
           <div
             className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"
-            data-tauri-drag-region
           >
             <div className="flex items-center gap-2.5">
               <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/20 border border-cyan-400/30 rounded shadow-[0_0_10px_rgba(6,182,212,0.3)]">

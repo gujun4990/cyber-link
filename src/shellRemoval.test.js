@@ -34,8 +34,10 @@ test('App root renders the card as the only visible surface', () => {
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'className');
   assert.ok(className && ts.isJsxAttribute(className));
   assert.match(className.initializer?.getText(sf) ?? '', /fixed inset-0 m-auto/);
+  assert.equal(className.initializer?.getText(sf).includes('rounded-xl'), false);
   assert.equal(source.includes('bg-[#020617]/40'), false);
   assert.equal(source.includes('flex items-center justify-center p-4 bg-[#020617]/40'), false);
+  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"\n            data-tauri-drag-region'), false);
 
   const styleAttr = opening.attributes.properties
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'style');

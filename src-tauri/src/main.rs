@@ -1114,9 +1114,7 @@ mod windows_app {
                             let _ = window.hide();
                         }
                     }
-                    StartupMode::Manual => {
-                        show_main_window(&app.handle());
-                    }
+                    StartupMode::Manual => {}
                 }
                 Ok(())
             })
