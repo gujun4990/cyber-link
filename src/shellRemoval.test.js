@@ -40,14 +40,33 @@ test('App root renders the card as the only visible surface', () => {
   const styleAttr = opening.attributes.properties
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'style');
   assert.ok(styleAttr && ts.isJsxAttribute(styleAttr));
-  assert.match(styleAttr.initializer?.getText(sf) ?? '', /backdropFilter: 'blur\(40px\)'/);
   assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(10, 20, 60, 1\)/);
+  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(15, 23, 42, 0\.95\)/);
+  assert.equal(styleAttr.initializer?.getText(sf).includes('backdropFilter'), false);
 
   assert.equal(source.includes('flex min-h-screen items-center justify-center p-4 overflow-hidden'), false);
   assert.equal(source.includes('<div className="flex min-h-screen items-center justify-center p-4 overflow-hidden">'), false);
   assert.equal(source.includes('w-64 flex flex-col py-2'), true);
   assert.equal(source.includes('底栏状态条'), true);
   assert.equal(source.includes('currentTime.toLocaleTimeString'), true);
+});
+
+test('card background keeps the blue translucent treatment', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+
+  assert.equal(source.includes('rgba(10, 20, 60, 1)'), true);
+  assert.equal(source.includes('rgba(6,182,212,0.1)'), true);
+  assert.equal(source.includes("import windowSize from './shared/windowSize.json';"), true);
+  assert.equal(source.includes('width: windowSize.width,'), true);
+  assert.equal(source.includes('height: windowSize.height,'), true);
+  assert.match(source, /background: `\s*linear-gradient\(135deg, rgba\(15, 23, 42, 0\.95\), rgba\(8, 14, 44, 0\.98\)\),\s*rgba\(10, 20, 60, 1\)\s*`/);
+});
+
+test('window size load failures are logged instead of silently ignored', () => {
+  const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+
+  assert.equal(mainSource.includes('failed to load main window size'), true);
+  assert.equal(mainSource.includes('main window size'), true);
 });
 
 test('tauri window is configured as a single transparent surface', () => {

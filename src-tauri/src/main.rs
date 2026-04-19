@@ -700,16 +700,24 @@ mod windows_app {
         AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
         WindowEvent,
     };
+    use serde::Deserialize;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, SetLastError};
     use windows_sys::Win32::System::Threading::CreateMutexW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, FindWindowW, SetForegroundWindow, SetWindowLongPtrW,
-        ShowWindow, GWLP_WNDPROC, SW_RESTORE, WM_NCDESTROY, WNDPROC,
+        SetWindowPos, ShowWindow, GWLP_WNDPROC, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER,
+        WM_NCDESTROY, WNDPROC,
     };
     use winreg::{enums::*, RegKey};
 
     pub struct SharedState(pub Mutex<DeviceSnapshot>);
+
+    #[derive(Deserialize)]
+    struct WindowSize {
+        width: f64,
+        height: f64,
+    }
 
     static ORIGINAL_WNDPROCS: OnceLock<Mutex<HashMap<isize, isize>>> = OnceLock::new();
     static INSTANCE_MUTEX: OnceLock<usize> = OnceLock::new();
@@ -728,8 +736,40 @@ mod windows_app {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
+    fn main_window_size() -> Result<WindowSize, String> {
+        serde_json::from_str(include_str!("../../src/shared/windowSize.json")).map_err(|err| {
+            let message = format!("failed to load main window size: {err}");
+            eprintln!("{message}");
+            message
+        })
+    }
+
+    fn apply_main_window_size(window: &tauri::Window) {
+        if let Ok(size) = main_window_size() {
+            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: size.width,
+                height: size.height,
+            }));
+        }
+    }
+
+    unsafe fn apply_main_window_size_to_hwnd(hwnd: HWND) {
+        if let Ok(size) = main_window_size() {
+            let _ = SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                size.width as i32,
+                size.height as i32,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+        }
+    }
+
     fn show_main_window(app: &AppHandle) {
         if let Some(window) = app.get_window("main") {
+            apply_main_window_size(&window);
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
@@ -777,11 +817,12 @@ mod windows_app {
                         let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
                         (!hwnd.is_null()).then_some(hwnd as usize)
                     },
-                    |hwnd| {
-                        let hwnd = hwnd as HWND;
-                        let _ = ShowWindow(hwnd, SW_RESTORE);
-                        let _ = SetForegroundWindow(hwnd);
-                    },
+                        |hwnd| {
+                            let hwnd = hwnd as HWND;
+                            let _ = ShowWindow(hwnd, SW_RESTORE);
+                            unsafe { apply_main_window_size_to_hwnd(hwnd) };
+                            let _ = SetForegroundWindow(hwnd);
+                        },
                     || {
                         eprintln!(
                             "single-instance mutex exists but main window was not found; skipping duplicate startup"

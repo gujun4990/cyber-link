@@ -23,6 +23,7 @@ import { motion } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
 import { applyStateRefresh } from './appState.js';
 import { withTimeout } from './initTimeout.js';
+import windowSize from './shared/windowSize.json';
 
 interface ACState {
   isOn: boolean;
@@ -221,13 +222,14 @@ export default function App() {
         layoutId="main-dashboard"
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="fixed inset-0 m-auto w-full max-w-[700px] aspect-[16/10] border-[1.5px] border-white/10 rounded-xl overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.8),0_0_20px_rgba(6,182,212,0.1)] antialiased"
+        className="fixed inset-0 m-auto border-[1.5px] border-white/10 rounded-xl overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.8),0_0_20px_rgba(6,182,212,0.1)] antialiased"
         style={{
+          width: windowSize.width,
+          height: windowSize.height,
           background: `
             linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(8, 14, 44, 0.98)),
             rgba(10, 20, 60, 1)
           `,
-          backdropFilter: 'blur(40px)',
         }}
       >
         {/* 窗口边框和材质层，负责整体的客户端壳感。 */}
