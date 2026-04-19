@@ -139,7 +139,7 @@ impl HaAction {
                     .ok_or_else(|| anyhow!("light entity is not configured"))?;
                 Ok(HaRequest {
                     url: format!(
-                        "{base}/api/services/light/{}",
+                        "{base}/api/services/switch/{}",
                         if *on { "turn_on" } else { "turn_off" }
                     ),
                     body: json!({"entity_id": entity_id}),
@@ -1680,7 +1680,7 @@ mod tests {
                 if request.contains("/api/services/climate/turn_off") {
                     seen_for_server.lock().unwrap().push("ac");
                 }
-                if request.contains("/api/services/light/turn_off") {
+                if request.contains("/api/services/switch/turn_off") {
                     seen_for_server.lock().unwrap().push("light");
                 }
                 socket
@@ -1746,7 +1746,7 @@ mod tests {
             .into_request(&config)
             .expect("request");
 
-        assert_eq!(request.url, "https://ha.example.local/api/services/light/turn_off");
+        assert_eq!(request.url, "https://ha.example.local/api/services/switch/turn_off");
         assert_eq!(
             request.body,
             serde_json::json!({"entity_id": "light.office_light"})
