@@ -16,7 +16,7 @@ test('applyStateRefresh clears refresh failure state on success', () => {
       initError: 'initial failure',
     },
     initFailed: true,
-    actionFailed: false,
+    actionFailed: true,
     refreshFailed: true,
     refreshError: 'refresh failed',
   };
@@ -36,7 +36,7 @@ test('applyStateRefresh clears refresh failure state on success', () => {
 
   assert.equal(next.device, snapshot);
   assert.equal(next.initFailed, false);
-  assert.equal(next.actionFailed, false);
+  assert.equal(next.actionFailed, true);
   assert.equal(next.refreshFailed, false);
   assert.equal(next.refreshError, null);
 });

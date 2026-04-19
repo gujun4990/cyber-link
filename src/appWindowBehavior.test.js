@@ -24,7 +24,7 @@ test('top bar supports drag but ignores double click', () => {
 test('top bar supports drag but ignores double click', () => {
   const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 
-  assert.equal(appSource.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"\n            onMouseDown'), true);
+  assert.equal(appSource.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-xl select-none"\n            onMouseDown'), true);
   assert.equal(appSource.includes('onDoubleClickCapture'), true);
   assert.equal(appSource.includes('preventDefault()'), true);
   assert.equal(appSource.includes('stopPropagation()'), true);

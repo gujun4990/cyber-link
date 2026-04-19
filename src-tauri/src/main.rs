@@ -424,9 +424,27 @@ async fn send_startup_online(config: &AppConfig) -> Result<()> {
 #[cfg_attr(not(windows), allow(dead_code))]
 async fn send_shutdown_signal(config: &AppConfig) -> Result<()> {
     if config.pc_entity_id().is_some() {
-        send_ha_notification(config, false).await
-    } else {
-        Ok(())
+        send_ha_notification(config, false).await?;
+        return Ok(());
+    }
+
+    let mut first_err: Option<anyhow::Error> = None;
+
+    if config.ac_entity_id().is_some() {
+        if let Err(err) = send_ha_action(config, HaAction::ToggleAc { on: false }).await {
+            first_err = Some(err);
+        }
+    }
+
+    if config.light_entity_id().is_some() {
+        if let Err(err) = send_ha_action(config, HaAction::ToggleLight { on: false }).await {
+            first_err.get_or_insert(err);
+        }
+    }
+
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(()),
     }
 }
 
@@ -627,25 +645,55 @@ fn offline_snapshot(config: &AppConfig) -> DeviceSnapshot {
     snapshot
 }
 
-async fn reconcile_action_snapshot(
+#[cfg_attr(any(test, not(windows)), allow(dead_code))]
+const ACTION_CONFIRMATION_INITIAL_DELAY: Duration = Duration::from_secs(2);
+#[cfg_attr(any(test, not(windows)), allow(dead_code))]
+const ACTION_CONFIRMATION_RETRY_COUNT: usize = 5;
+#[cfg_attr(any(test, not(windows)), allow(dead_code))]
+const ACTION_CONFIRMATION_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+
+async fn confirm_action_snapshot_with_delays<F>(
     config: &AppConfig,
     original: &DeviceSnapshot,
-    optimistic: DeviceSnapshot,
-    action_result: Result<()>,
-) -> Result<(DeviceSnapshot, Option<String>)> {
-    let refresh_result = refresh_snapshot_with_retry(config).await;
+    action_error: Option<String>,
+    expected: F,
+    initial_delay: Duration,
+    retry_count: usize,
+    retry_interval: Duration,
+    pending_message: &'static str,
+) -> ActionApplyOutcome
+where
+    F: Fn(&DeviceSnapshot) -> bool,
+{
+    let mut last_snapshot = original.clone();
+    let mut last_error = action_error;
 
-    match (action_result, refresh_result) {
-        (Ok(()), Ok(snapshot)) => Ok((
-            if snapshot == *original { optimistic } else { snapshot },
-            None,
-        )),
-        (Ok(()), Err(_)) => Ok((optimistic, None)),
-        (Err(action_err), Ok(snapshot)) => Ok((
-            if snapshot == *original { original.clone() } else { snapshot },
-            Some(action_err.to_string()),
-        )),
-        (Err(action_err), Err(_)) => Ok((original.clone(), Some(action_err.to_string()))),
+    tokio::time::sleep(initial_delay).await;
+
+    for _ in 0..retry_count {
+        match fetch_current_snapshot(config).await {
+            Ok(snapshot) => {
+                if expected(&snapshot) {
+                    return ActionApplyOutcome {
+                        snapshot,
+                        error: None,
+                    };
+                }
+
+                last_snapshot = snapshot;
+                last_error = Some(pending_message.to_string());
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+
+        tokio::time::sleep(retry_interval).await;
+    }
+
+    ActionApplyOutcome {
+        snapshot: last_snapshot,
+        error: last_error,
     }
 }
 
@@ -655,10 +703,31 @@ struct ActionApplyOutcome {
     error: Option<String>,
 }
 
+#[cfg_attr(any(test, not(windows)), allow(dead_code))]
 async fn apply_action(
+    config: &AppConfig,
+    snapshot: DeviceSnapshot,
+    args: ActionArgs,
+) -> Result<ActionApplyOutcome> {
+    apply_action_with_delays(
+        config,
+        snapshot,
+        args,
+        ACTION_CONFIRMATION_INITIAL_DELAY,
+        ACTION_CONFIRMATION_RETRY_COUNT,
+        ACTION_CONFIRMATION_RETRY_INTERVAL,
+    )
+    .await
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+async fn apply_action_with_delays(
     config: &AppConfig,
     mut snapshot: DeviceSnapshot,
     args: ActionArgs,
+    initial_delay: Duration,
+    retry_count: usize,
+    retry_interval: Duration,
 ) -> Result<ActionApplyOutcome> {
     match args.action.as_str() {
         "ac_toggle" => {
@@ -673,13 +742,19 @@ async fn apply_action(
             )
             .await;
             snapshot.ac.is_on = next;
-            let (next_snapshot, error) =
-                reconcile_action_snapshot(config, &original, snapshot, result.map(|_| ()))
-                    .await?;
-            return Ok(ActionApplyOutcome {
-                snapshot: next_snapshot,
-                error,
-            });
+            return Ok(
+                confirm_action_snapshot_with_delays(
+                    config,
+                    &original,
+                    result.err().map(|err| err.to_string()),
+                    move |current| current.ac.is_on == next,
+                    initial_delay,
+                    retry_count,
+                    retry_interval,
+                    "空调尚未进入预期开关状态，继续等待刷新。",
+                )
+                .await,
+            );
         }
         "ac_set_temp" => {
             if config.ac_entity_id().is_none() {
@@ -689,13 +764,19 @@ async fn apply_action(
             let temp = args.value.ok_or_else(|| anyhow!("missing temperature"))?;
             let result = send_ha_request(config, HaAction::SetTemp { temp }.into_request(config)?).await;
             snapshot.ac.temp = temp;
-            let (next_snapshot, error) =
-                reconcile_action_snapshot(config, &original, snapshot, result.map(|_| ()))
-                    .await?;
-            return Ok(ActionApplyOutcome {
-                snapshot: next_snapshot,
-                error,
-            });
+            return Ok(
+                confirm_action_snapshot_with_delays(
+                    config,
+                    &original,
+                    result.err().map(|err| err.to_string()),
+                    move |current| current.ac.is_on && current.ac.temp == temp,
+                    initial_delay,
+                    retry_count,
+                    retry_interval,
+                    "空调尚未进入预期温度状态，继续等待刷新。",
+                )
+                .await,
+            );
         }
         "light_toggle" => {
             if config.light_entity_id().is_none() {
@@ -709,13 +790,19 @@ async fn apply_action(
             )
             .await;
             snapshot.light_on = next;
-            let (next_snapshot, error) =
-                reconcile_action_snapshot(config, &original, snapshot, result.map(|_| ()))
-                    .await?;
-            return Ok(ActionApplyOutcome {
-                snapshot: next_snapshot,
-                error,
-            });
+            return Ok(
+                confirm_action_snapshot_with_delays(
+                    config,
+                    &original,
+                    result.err().map(|err| err.to_string()),
+                    move |current| current.light_on == next,
+                    initial_delay,
+                    retry_count,
+                    retry_interval,
+                    "环境氛围照明尚未进入预期开关状态，继续等待刷新。",
+                )
+                .await,
+            );
         }
         "startup_online" => {
             send_startup_online(config).await?;
@@ -1309,7 +1396,7 @@ mod tests {
         snapshot_from_loaded_states, startup_online_targets, startup_window_action,
         tolerate_autostart_error, try_restore_existing_window, ActionArgs, AppConfig,
         ACState, DeviceIds, DeviceSnapshot, HaAction, HaEntityState, StartupMode,
-        StartupWindowAction, apply_action,
+        StartupWindowAction, apply_action_with_delays, send_shutdown_signal,
         bootstrap_startup_mode, main_window_title, startup_mode_from_args,
     };
     use anyhow::anyhow;
@@ -1524,6 +1611,99 @@ mod tests {
             request.body,
             serde_json::json!({"entity_id": "input_boolean.pc_05_online"})
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_with_pc_entity_skips_device_controls() {
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        std::env::set_var("no_proxy", "127.0.0.1,localhost");
+        std::env::set_var("HTTP_PROXY", "");
+        std::env::set_var("HTTPS_PROXY", "");
+        std::env::set_var("http_proxy", "");
+        std::env::set_var("https_proxy", "");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let seen = Arc::new(StdMutex::new(Vec::<&'static str>::new()));
+        let seen_for_server = Arc::clone(&seen);
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = vec![0u8; 4096];
+            let n = socket.read(&mut buf).await.expect("read request");
+            let request = String::from_utf8_lossy(&buf[..n]);
+            if request.contains("/api/services/input_boolean/turn_off") {
+                seen_for_server.lock().unwrap().push("pc");
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .expect("write response");
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
+        };
+
+        assert!(send_shutdown_signal(&config).await.is_ok());
+        server.await.expect("server task");
+
+        assert_eq!(seen.lock().unwrap().as_slice(), ["pc"]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_without_pc_entity_targets_device_controls() {
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        std::env::set_var("no_proxy", "127.0.0.1,localhost");
+        std::env::set_var("HTTP_PROXY", "");
+        std::env::set_var("HTTPS_PROXY", "");
+        std::env::set_var("http_proxy", "");
+        std::env::set_var("https_proxy", "");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let seen = Arc::new(StdMutex::new(Vec::<&'static str>::new()));
+        let seen_for_server = Arc::clone(&seen);
+
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let mut buf = vec![0u8; 4096];
+                let n = socket.read(&mut buf).await.expect("read request");
+                let request = String::from_utf8_lossy(&buf[..n]);
+                if request.contains("/api/services/climate/turn_off") {
+                    seen_for_server.lock().unwrap().push("ac");
+                }
+                if request.contains("/api/services/light/turn_off") {
+                    seen_for_server.lock().unwrap().push("light");
+                }
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                    .await
+                    .expect("write response");
+            }
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
+        };
+
+        assert!(send_shutdown_signal(&config).await.is_ok());
+        server.await.expect("server task");
+
+        assert_eq!(seen.lock().unwrap().as_slice(), ["ac", "light"]);
     }
 
     #[test]
@@ -2091,20 +2271,23 @@ mod tests {
             connected: true,
         };
 
-        let outcome = apply_action(
+        let outcome = apply_action_with_delays(
             &config,
             snapshot,
             ActionArgs {
                 action: "ac_toggle".into(),
                 value: None,
             },
+            Duration::ZERO,
+            1,
+            Duration::ZERO,
         )
         .await
         .expect("action should recover from transport failure when refresh succeeds");
 
         server.await.expect("server task");
 
-        assert!(outcome.error.is_some());
+        assert!(outcome.error.is_none());
         assert!(outcome.snapshot.ac.is_on);
         assert_eq!(outcome.snapshot.ac.temp, 24);
         assert!(outcome.snapshot.connected);

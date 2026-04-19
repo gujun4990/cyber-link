@@ -37,14 +37,14 @@ test('App root renders the card as the only visible surface', () => {
   assert.equal(className.initializer?.getText(sf).includes('rounded-xl'), false);
   assert.equal(source.includes('bg-[#020617]/40'), false);
   assert.equal(source.includes('flex items-center justify-center p-4 bg-[#020617]/40'), false);
-  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"\n            onMouseDown'), true);
-  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"\n            data-tauri-drag-region'), false);
+  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-xl select-none"\n            onMouseDown'), true);
+  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-xl select-none"\n            data-tauri-drag-region'), false);
 
   const styleAttr = opening.attributes.properties
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'style');
   assert.ok(styleAttr && ts.isJsxAttribute(styleAttr));
-  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(10, 20, 60, 1\)/);
-  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(15, 23, 42, 0\.95\)/);
+  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(14, 26, 80, 1\)/);
+  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(18, 32, 72, 0\.90\)/);
   assert.equal(styleAttr.initializer?.getText(sf).includes('backdropFilter'), false);
 
   assert.equal(source.includes('flex min-h-screen items-center justify-center p-4 overflow-hidden'), false);
@@ -57,12 +57,12 @@ test('App root renders the card as the only visible surface', () => {
 test('card background keeps the blue translucent treatment', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 
-  assert.equal(source.includes('rgba(10, 20, 60, 1)'), true);
-  assert.equal(source.includes('rgba(6,182,212,0.1)'), true);
+  assert.equal(source.includes('rgba(14, 26, 80, 1)'), true);
+  assert.equal(source.includes('rgba(6,182,212,0.25)'), true);
   assert.equal(source.includes("import windowSize from './shared/windowSize.json';"), true);
   assert.equal(source.includes('width: windowSize.width,'), true);
   assert.equal(source.includes('height: windowSize.height,'), true);
-  assert.match(source, /background: `\s*linear-gradient\(135deg, rgba\(15, 23, 42, 0\.95\), rgba\(8, 14, 44, 0\.98\)\),\s*rgba\(10, 20, 60, 1\)\s*`/);
+  assert.match(source, /background: `\s*linear-gradient\(135deg, rgba\(18, 32, 72, 0\.90\), rgba\(10, 20, 60, 0\.95\)\),\s*rgba\(14, 26, 80, 1\)\s*`/);
 });
 
 test('window size load failures are logged instead of silently ignored', () => {
@@ -96,7 +96,9 @@ test('startup renders both switches off until state is known', () => {
   assert.equal(source.includes('const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;'), true);
   assert.equal(source.includes('const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;'), true);
   assert.equal(source.includes('const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
-  assert.equal(source.includes('disabled={!hasLoadedState || !device.connected || !device.acAvailable}'), true);
+  assert.equal(source.includes('const [syncingAction, setSyncingAction] = useState(false);'), true);
+  assert.equal(source.includes('syncingAction || !device.connected || !device.acAvailable'), true);
+  assert.equal(source.includes('disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}'), true);
   assert.equal(source.includes('active={acDisplayOn}'), true);
   assert.equal(source.includes('active={lightDisplayOn}'), true);
   assert.equal(source.includes("subLabel={acDisplayOn ? '核心运行中' : '已关闭'}"), true);

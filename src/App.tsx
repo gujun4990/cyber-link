@@ -70,6 +70,7 @@ export default function App() {
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncingAction, setSyncingAction] = useState(false);
   const [hasLoadedState, setHasLoadedState] = useState(false);
   const syncingRef = useRef(false);
   const consoleFallbackRef = useRef<Pick<Console, 'error' | 'warn'>>({
@@ -186,6 +187,7 @@ export default function App() {
     }
 
     syncingRef.current = true;
+    setSyncingAction(true);
     try {
       const payload = value === undefined ? { action } : { action, value };
       await invoke<DeviceState>('handle_ha_action', payload);
@@ -195,12 +197,13 @@ export default function App() {
       setActionFailed(true);
     } finally {
       syncingRef.current = false;
+      setSyncingAction(false);
     }
   };
 
   // 设备不可用时直接拦截，保持 UI 和后端能力一致。
   const toggleAC = () => {
-    if (!hasLoadedState || !device.acAvailable) {
+    if (!hasLoadedState || syncingAction || !device.acAvailable) {
       return;
     }
 
@@ -208,7 +211,7 @@ export default function App() {
   };
 
   const adjustTemp = async (delta: number) => {
-    if (!hasLoadedState || !device.ac.isOn || !device.acAvailable) {
+    if (!hasLoadedState || syncingAction || !device.ac.isOn || !device.acAvailable) {
       return;
     }
 
@@ -216,7 +219,7 @@ export default function App() {
   };
 
   const toggleLight = () => {
-    if (!hasLoadedState || !device.lightAvailable) {
+    if (!hasLoadedState || syncingAction || !device.lightAvailable) {
       return;
     }
 
@@ -237,6 +240,7 @@ export default function App() {
         'refresh_ha_state timed out',
       );
       setHasLoadedState(true);
+      setActionFailed(false);
     } catch (error) {
       void reportError('Failed to refresh HA state', error);
       const msg = describeError(error);
@@ -300,23 +304,23 @@ export default function App() {
         layoutId="main-dashboard"
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="fixed inset-0 m-auto border-[1.5px] border-white/10 overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.8),0_0_20px_rgba(6,182,212,0.1)] antialiased"
+        className="fixed inset-0 m-auto border-[1.5px] border-white/20 overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.7),0_0_40px_rgba(6,182,212,0.25)] antialiased"
         style={{
           width: windowSize.width,
           height: windowSize.height,
           background: `
-            linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(8, 14, 44, 0.98)),
-            rgba(10, 20, 60, 1)
+            linear-gradient(135deg, rgba(18, 32, 72, 0.90), rgba(10, 20, 60, 0.95)),
+            rgba(14, 26, 80, 1)
           `,
         }}
       >
         {/* 窗口边框和材质层，负责整体的客户端壳感。 */}
-        <div className="absolute inset-0 rounded-xl border border-white/5 pointer-events-none z-50" />
+        <div className="absolute inset-0 rounded-xl border border-white/10 pointer-events-none z-50" />
         <div className="absolute inset-0 bg-carbon mix-blend-soft-light opacity-20 pointer-events-none" />
 
           {/* 顶栏支持拖拽，右侧按钮区必须禁用拖拽。 */}
           <div
-            className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"
+            className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-xl select-none"
             onMouseDown={(event) => {
               void dragTopBar(event);
             }}
@@ -326,11 +330,11 @@ export default function App() {
             }}
           >
             <div className="flex items-center gap-2.5">
-              <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/20 border border-cyan-400/30 rounded shadow-[0_0_10px_rgba(6,182,212,0.3)]">
-                <Monitor size={14} className="text-cyan-400" />
+              <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/35 border border-cyan-400/50 rounded shadow-[0_0_18px_rgba(6,182,212,0.55)]">
+                <Monitor size={14} className="text-cyan-300" />
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] font-black tracking-widest text-white/90 antialiased uppercase">
+                <span className="text-[10px] font-black tracking-widest text-white antialiased uppercase">
                   Cyber Terminal v0.9
                 </span>
               </div>
@@ -344,19 +348,19 @@ export default function App() {
                   void refreshHaState();
                 }}
                 disabled={refreshing}
-                className={`w-7 h-7 flex items-center justify-center text-white/40 hover:text-cyan-400 transition-colors cursor-pointer ${
+                className={`w-7 h-7 flex items-center justify-center text-white/60 hover:text-cyan-300 transition-colors cursor-pointer ${
                   refreshing ? 'opacity-60 cursor-not-allowed' : ''
                 }`}
                 title="刷新"
               >
                 <RefreshCw size={14} strokeWidth={2} className={refreshing ? 'animate-spin' : ''} />
               </motion.button>
-              <div className="w-px h-4 bg-white/10 mx-1" />
+              <div className="w-px h-4 bg-white/15 mx-1" />
               <button
                 onClick={() => {
                   void minimizeWindow();
                 }}
-                className="w-8 h-8 flex items-center justify-center text-white/40 hover:bg-white/5 hover:text-white rounded transition-all cursor-pointer"
+                className="w-8 h-8 flex items-center justify-center text-white/60 hover:bg-white/10 hover:text-white rounded transition-all cursor-pointer"
               >
                 <Minus size={16} strokeWidth={2} />
               </button>
@@ -364,7 +368,7 @@ export default function App() {
                 onClick={() => {
                   void hideWindow();
                 }}
-                className="w-8 h-8 flex items-center justify-center text-white/40 hover:bg-rose-500 hover:text-white rounded transition-all cursor-pointer"
+                className="w-8 h-8 flex items-center justify-center text-white/60 hover:bg-rose-500 hover:text-white rounded transition-all cursor-pointer"
               >
                 <X size={16} strokeWidth={2} />
               </button>
@@ -373,26 +377,26 @@ export default function App() {
 
           {/* 主体区：中间控制盘 + 右侧开关。 */}
           <div className="relative flex-1 flex flex-col overflow-hidden">
-            <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent pointer-events-none" />
+            <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/70 to-transparent pointer-events-none" />
 
             <div className="relative flex-1 flex items-center justify-around px-12 py-4 overflow-visible">
                   {/* 中央温控盘：视觉核心。 */}
                   <div className="relative flex items-center justify-center w-[360px] h-[360px]">
                     <motion.div
-                      className="absolute w-[320px] h-[320px] border border-dashed border-cyan-500/10 rounded-full"
+                      className="absolute w-[320px] h-[320px] border border-dashed border-cyan-500/25 rounded-full"
                       animate={{ rotate: 360 }}
                       transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}
                     />
                     <motion.div
-                      className="absolute w-[280px] h-[280px] border-2 border-cyan-400/20 rounded-full border-t-transparent border-b-transparent"
+                      className="absolute w-[280px] h-[280px] border-2 border-cyan-400/40 rounded-full border-t-transparent border-b-transparent"
                       animate={{ rotate: -360 }}
                       transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
                     />
-                    <div className="absolute w-[240px] h-[240px] border-4 border-cyan-500/5 rounded-full shadow-[inset_0_0_40px_rgba(6,182,212,0.05)]" />
+                    <div className="absolute w-[240px] h-[240px] border-4 border-cyan-500/10 rounded-full shadow-[inset_0_0_40px_rgba(6,182,212,0.08)]" />
 
                     <div className="relative z-10 flex flex-col items-center justify-center h-full w-full">
                       <div className="absolute top-4 flex flex-col items-center gap-1">
-                        <span className="text-[11px] font-black tracking-[0.5em] text-white/50 uppercase font-sans drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]">
+                        <span className="text-[11px] font-black tracking-[0.5em] text-white/70 uppercase font-sans drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]">
                           空调控制系统
                         </span>
 
@@ -401,8 +405,8 @@ export default function App() {
                           <div
                             className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-700 overflow-hidden ${
                               coolingModeActive
-                                ? 'border-cyan-200 bg-cyan-400/40 text-white shadow-[0_0_30px_rgba(6,182,212,0.7),inset_0_0_15px_rgba(255,255,255,0.4)]'
-                                : 'border-white/5 bg-white/2 text-white/10'
+                                ? 'border-cyan-100 bg-cyan-400/55 text-white shadow-[0_0_45px_rgba(6,182,212,0.9),inset_0_0_20px_rgba(255,255,255,0.5)]'
+                                : 'border-white/8 bg-white/2 text-white/15'
                             }`}
                           >
                             <div className="absolute inset-0 circuit-pattern opacity-30 pointer-events-none" />
@@ -420,11 +424,11 @@ export default function App() {
                           <div
                             className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-700 overflow-hidden ${
                               heatingModeActive
-                                ? 'border-orange-400 bg-orange-500/30 text-white shadow-[0_0_20px_rgba(249,115,22,0.4)]'
-                                : 'border-white/5 bg-white/2 text-white/5'
+                                ? 'border-orange-300 bg-orange-500/40 text-white shadow-[0_0_30px_rgba(249,115,22,0.6)]'
+                                : 'border-white/5 bg-white/2 text-white/8'
                             }`}
                           >
-                            <Flame size={12} className={heatingModeActive ? 'animate-pulse text-orange-400' : ''} />
+                            <Flame size={12} className={heatingModeActive ? 'animate-pulse text-orange-300' : ''} />
                             <span className="text-[9px] font-black tracking-widest uppercase antialiased opacity-60">
                               制热模式
                             </span>
@@ -446,10 +450,10 @@ export default function App() {
                           onClick={() => {
                             void adjustTemp(-1);
                           }}
-                          disabled={!hasLoadedState || !device.connected || !device.acAvailable || !device.ac.isOn}
+                          disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable || !device.ac.isOn}
                           className={`p-2 transition-all rounded-full border border-transparent ${
                             tempDisplayOn
-                              ? 'text-cyan-100/80 hover:border-cyan-300/40 hover:bg-cyan-400/10 cursor-pointer'
+                              ? 'text-cyan-200/90 hover:border-cyan-300/50 hover:bg-cyan-400/15 cursor-pointer'
                               : 'text-cyan-950/20 cursor-not-allowed'
                           }`}
                         >
@@ -459,12 +463,12 @@ export default function App() {
                         <div className="flex flex-col items-center min-w-[140px] relative">
                           <div
                             className={`absolute inset-0 blur-[50px] rounded-full transition-all duration-1000 ${
-                              tempDisplayOn ? 'bg-cyan-400/20 scale-110' : 'bg-transparent'
+                              tempDisplayOn ? 'bg-cyan-400/40 scale-110' : 'bg-transparent'
                             }`}
                           />
                           <div
                             className={`absolute inset-0 blur-[25px] rounded-full transition-all duration-1000 ${
-                              tempDisplayOn ? 'bg-purple-500/5 scale-125' : 'bg-transparent'
+                              tempDisplayOn ? 'bg-purple-500/8 scale-125' : 'bg-transparent'
                             }`}
                           />
 
@@ -476,7 +480,9 @@ export default function App() {
                               tempDisplayOn ? 'text-iridescent' : 'text-cyan-950/20'
                             }`}
                             style={{
-                              filter: tempDisplayOn ? 'drop-shadow(0 0 20px rgba(6,182,212,0.5))' : 'none',
+                              filter: tempDisplayOn
+                                ? 'drop-shadow(0 0 35px rgba(6,182,212,0.85)) drop-shadow(0 0 60px rgba(6,182,212,0.4))'
+                                : 'none',
                             }}
                           >
                             {device.ac.temp}
@@ -489,10 +495,10 @@ export default function App() {
                           onClick={() => {
                             void adjustTemp(1);
                           }}
-                          disabled={!hasLoadedState || !device.connected || !device.acAvailable || !device.ac.isOn}
+                          disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable || !device.ac.isOn}
                           className={`p-2 transition-all rounded-full border border-transparent ${
                             tempDisplayOn
-                              ? 'text-cyan-100/80 hover:border-cyan-300/40 hover:bg-cyan-400/10 cursor-pointer'
+                              ? 'text-cyan-200/90 hover:border-cyan-300/50 hover:bg-cyan-400/15 cursor-pointer'
                               : 'text-cyan-950/20 cursor-not-allowed'
                           }`}
                         >
@@ -506,8 +512,8 @@ export default function App() {
                   <div className="w-64 flex flex-col py-2">
                     <div className="flex flex-col flex-1 justify-center gap-8">
                       <div className="flex items-center gap-3 px-1 mb-2">
-                        <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_15px_white]" />
-                        <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase drop-shadow-[0_0_12px_cyan]">
+                        <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_18px_white,0_0_30px_rgba(255,255,255,0.4)]" />
+                        <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase drop-shadow-[0_0_15px_cyan]">
                           操作开关
                         </span>
                       </div>
@@ -516,7 +522,7 @@ export default function App() {
                         <TechToggle
                           active={acDisplayOn}
                           onClick={toggleAC}
-                          disabled={!hasLoadedState || !device.connected || !device.acAvailable}
+                          disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}
                           label="空调核心系统"
                           subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
                           icon={<Fan className={acDisplayOn ? 'animate-spin' : ''} size={24} />}
@@ -525,7 +531,7 @@ export default function App() {
                         <TechToggle
                           active={lightDisplayOn}
                           onClick={toggleLight}
-                          disabled={!hasLoadedState || !device.connected || !device.lightAvailable}
+                          disabled={!hasLoadedState || syncingAction || !device.connected || !device.lightAvailable}
                           label="环境氛围照明"
                           subLabel={lightDisplayOn ? '强光已开启' : '已关闭'}
                           icon={<Lightbulb size={24} />}
@@ -536,8 +542,8 @@ export default function App() {
                 </div>
 
                 {/* 底栏状态条：时间、连接状态、版本标识。 */}
-                <div className="relative px-6 py-4 bg-black/40 text-[10px] flex justify-between items-center tracking-[0.2em] font-black border-t border-white/5 text-white/30 antialiased overflow-hidden">
-                  <div className="absolute top-0 left-0 w-full h-[1px] overflow-hidden opacity-10">
+                <div className="relative px-6 py-4 bg-black/20 text-[10px] flex justify-between items-center tracking-[0.2em] font-black border-t border-white/10 text-white/50 antialiased overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-[1px] overflow-hidden opacity-15">
                     <motion.div
                       animate={{ x: [0, -1000] }}
                       transition={{ duration: 30, repeat: Infinity, ease: 'linear' }}
@@ -550,20 +556,20 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center gap-5 relative z-10">
-                    <span className="text-white/60">
+                    <span className="text-white/80">
                       TIME: <span className="font-mono">{currentTime.toLocaleTimeString('zh-CN', { hour12: false })}</span>
                     </span>
-                    <span className="text-white/10">|</span>
+                    <span className="text-white/15">|</span>
                     <div className="flex items-center gap-2">
                       <div
                         className={`w-1.5 h-1.5 rounded-full ${
-                          device.connected ? 'bg-cyan-400 animate-ping opacity-60' : 'bg-rose-400'
+                          device.connected ? 'bg-cyan-300 animate-ping opacity-80' : 'bg-rose-300'
                         }`}
                       />
-                      <span className="text-white/40 uppercase">{statusLabel}</span>
+                      <span className="text-white/60 uppercase">{statusLabel}</span>
                     </div>
                   </div>
-                  <span className="text-white/10 tracking-[0.4em] font-mono">B_CTL_V9</span>
+                  <span className="text-white/20 tracking-[0.4em] font-mono">B_CTL_V9</span>
                 </div>
               </div>
       </motion.div>
@@ -592,40 +598,46 @@ function TechToggle({
       whileTap={{ scale: 0.96 }}
       onClick={onClick}
       disabled={disabled}
-      className={`relative w-full p-4 rounded-xl border transition-all duration-700 flex items-center gap-5 overflow-hidden group shadow-neumorphic ${
+      className={`relative w-full p-4 rounded-xl border transition-all duration-700 flex items-center gap-5 overflow-hidden group ${
         disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
       } ${
         active
-          ? 'bg-cyan-500/15 border-cyan-400/40 text-white shadow-neumorphic-pressed'
-          : 'bg-[#0a153a]/60 border-white/5 text-white/20'
+          ? 'bg-cyan-500/25 border-cyan-400/60 text-white shadow-[0_0_25px_rgba(6,182,212,0.2)]'
+          : 'bg-[#0a153a]/60 border-white/8 text-white/25'
       }`}
     >
       <div className="absolute inset-0 bg-carbon mix-blend-overlay opacity-10 pointer-events-none" />
 
       <div
         className={`p-3 rounded-lg border transition-all duration-700 relative overflow-hidden ${
-          active ? 'border-cyan-300 bg-cyan-400/30 shadow-[0_0_20px_rgba(6,182,212,0.6)]' : 'border-white/5 bg-white/2 opacity-30'
+          active
+            ? 'border-cyan-200 bg-cyan-400/50 shadow-[0_0_30px_rgba(6,182,212,0.85)]'
+            : 'border-white/5 bg-white/2 opacity-30'
         }`}
       >
         <div className={active && label.includes('空调') ? 'animate-spin opacity-80 blur-[1px]' : ''}>{icon}</div>
       </div>
 
       <div className="flex-1 text-left relative z-10">
-        <div className={`text-[14px] font-black tracking-[0.1em] font-sans antialiased transition-colors duration-500 ${active ? 'text-white' : 'text-white/20'}`}>
+        <div className={`text-[14px] font-black tracking-[0.1em] font-sans antialiased transition-colors duration-500 ${active ? 'text-white' : 'text-white/25'}`}>
           {label}
         </div>
-        <div className={`text-[10px] font-bold mt-0.5 font-sans opacity-60 transition-colors duration-500 ${active ? 'text-cyan-200' : 'text-white/10'}`}>
+        <div className={`text-[10px] font-bold mt-0.5 font-sans opacity-70 transition-colors duration-500 ${active ? 'text-cyan-100' : 'text-white/12'}`}>
           {subLabel}
         </div>
       </div>
 
-      <div className={`w-3 h-3 rounded-full transition-all duration-700 ${active ? 'bg-cyan-300 shadow-[0_0_15px_cyan,0_0_5px_white]' : 'bg-black/40 border border-white/10'}`} />
+      <div className={`w-3 h-3 rounded-full transition-all duration-700 ${
+        active
+          ? 'bg-cyan-200 shadow-[0_0_20px_cyan,0_0_8px_white,0_0_40px_rgba(6,182,212,0.6)]'
+          : 'bg-black/40 border border-white/10'
+      }`} />
 
       {active && (
         <motion.div
           animate={{ x: [-300, 500] }}
           transition={{ duration: 5, repeat: Infinity, ease: 'linear' }}
-          className="absolute top-0 right-0 bottom-0 w-32 bg-gradient-to-r from-transparent via-white/10 to-transparent skew-x-[40deg] pointer-events-none"
+          className="absolute top-0 right-0 bottom-0 w-32 bg-gradient-to-r from-transparent via-white/12 to-transparent skew-x-[40deg] pointer-events-none"
         />
       )}
     </motion.button>
