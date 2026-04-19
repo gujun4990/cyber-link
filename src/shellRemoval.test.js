@@ -34,16 +34,19 @@ test('App root renders the card as the only visible surface', () => {
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'className');
   assert.ok(className && ts.isJsxAttribute(className));
   assert.match(className.initializer?.getText(sf) ?? '', /fixed inset-0 m-auto/);
+  assert.equal(source.includes('bg-[#020617]/40'), false);
+  assert.equal(source.includes('flex items-center justify-center p-4 bg-[#020617]/40'), false);
 
   const styleAttr = opening.attributes.properties
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'style');
   assert.ok(styleAttr && ts.isJsxAttribute(styleAttr));
-  assert.match(styleAttr.initializer?.getText(sf) ?? '', /min\(700px, calc\(100vw - 32px\), calc\(\(100vh - 32px\) \* 1.6\)\)/);
+  assert.match(styleAttr.initializer?.getText(sf) ?? '', /backdropFilter: 'blur\(40px\)'/);
+  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(10, 20, 60, 1\)/);
 
   assert.equal(source.includes('flex min-h-screen items-center justify-center p-4 overflow-hidden'), false);
   assert.equal(source.includes('<div className="flex min-h-screen items-center justify-center p-4 overflow-hidden">'), false);
   assert.equal(source.includes('w-64 flex flex-col py-2'), true);
-  assert.equal(source.includes('底部信号栏'), true);
+  assert.equal(source.includes('底栏状态条'), true);
   assert.equal(source.includes('currentTime.toLocaleTimeString'), true);
 });
 
@@ -58,4 +61,11 @@ test('tauri window is configured as a single transparent surface', () => {
   assert.equal(mainWindow.visible, false);
   assert.equal(mainWindow.decorations, false);
   assert.equal(mainWindow.transparent, true);
+});
+
+test('windows tray double click reopens the main window', () => {
+  const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+
+  assert.match(mainSource, /show_main_window\(app\)/);
+  assert.match(mainSource, /SystemTrayEvent::DoubleClick \{ \.\. \} => show_main_window\(app\)/);
 });

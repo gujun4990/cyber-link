@@ -216,24 +216,23 @@ export default function App() {
         : 'Encrypted_Link_Stable';
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center p-4 bg-[#020617]/40 pointer-events-none">
-      <div className="pointer-events-auto">
-        <motion.div
-          layoutId="main-dashboard"
-          initial={{ opacity: 0, scale: 0.9, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="relative w-[700px] aspect-[16/10] border-[1.5px] border-white/10 rounded-xl overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.8),0_0_20px_rgba(6,182,212,0.1)] antialiased"
-          style={{
-            background: `
-              linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(8, 14, 44, 0.98)),
-              rgba(10, 20, 60, 1)
-            `,
-            backdropFilter: 'blur(40px)',
-          }}
-        >
-          {/* 窗口边框和材质层，负责整体的客户端壳感。 */}
-          <div className="absolute inset-0 rounded-xl border border-white/5 pointer-events-none z-50" />
-          <div className="absolute inset-0 bg-carbon mix-blend-soft-light opacity-20 pointer-events-none" />
+    <>
+      <motion.div
+        layoutId="main-dashboard"
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="fixed inset-0 m-auto w-full max-w-[700px] aspect-[16/10] border-[1.5px] border-white/10 rounded-xl overflow-hidden flex flex-col shadow-[0_30px_100px_rgba(0,0,0,0.8),0_0_20px_rgba(6,182,212,0.1)] antialiased"
+        style={{
+          background: `
+            linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(8, 14, 44, 0.98)),
+            rgba(10, 20, 60, 1)
+          `,
+          backdropFilter: 'blur(40px)',
+        }}
+      >
+        {/* 窗口边框和材质层，负责整体的客户端壳感。 */}
+        <div className="absolute inset-0 rounded-xl border border-white/5 pointer-events-none z-50" />
+        <div className="absolute inset-0 bg-carbon mix-blend-soft-light opacity-20 pointer-events-none" />
 
           {/* 顶栏支持拖拽，右侧按钮区必须禁用拖拽。 */}
           <div
@@ -481,9 +480,8 @@ export default function App() {
                   <span className="text-white/10 tracking-[0.4em] font-mono">B_CTL_V9</span>
                 </div>
               </div>
-        </motion.div>
-      </div>
-    </div>
+      </motion.div>
+    </>
   );
 }
 

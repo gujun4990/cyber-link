@@ -744,12 +744,14 @@ mod windows_app {
     }
 
     fn handle_tray_event(app: &AppHandle, event: SystemTrayEvent) {
-        if let SystemTrayEvent::MenuItemClick { id, .. } = event {
-            match id.as_str() {
+        match event {
+            SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 TRAY_OPEN_ID => show_main_window(app),
                 TRAY_EXIT_ID => app.exit(0),
                 _ => {}
-            }
+            },
+            SystemTrayEvent::DoubleClick { .. } => show_main_window(app),
+            _ => {}
         }
     }
 
