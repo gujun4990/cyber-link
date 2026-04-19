@@ -697,7 +697,8 @@ mod windows_app {
         time::Duration,
     };
     use tauri::{
-        CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, WindowEvent,
+        AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
+        WindowEvent,
     };
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, SetLastError};
@@ -774,7 +775,7 @@ mod windows_app {
                         let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
                         (!hwnd.is_null()).then_some(hwnd as usize)
                     },
-                    |hwnd| unsafe {
+                    |hwnd| {
                         let hwnd = hwnd as HWND;
                         let _ = ShowWindow(hwnd, SW_RESTORE);
                         let _ = SetForegroundWindow(hwnd);
