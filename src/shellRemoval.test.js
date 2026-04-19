@@ -37,6 +37,7 @@ test('App root renders the card as the only visible surface', () => {
   assert.equal(className.initializer?.getText(sf).includes('rounded-xl'), false);
   assert.equal(source.includes('bg-[#020617]/40'), false);
   assert.equal(source.includes('flex items-center justify-center p-4 bg-[#020617]/40'), false);
+  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"\n            onMouseDown'), true);
   assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"\n            data-tauri-drag-region'), false);
 
   const styleAttr = opening.attributes.properties
@@ -69,6 +70,21 @@ test('window size load failures are logged instead of silently ignored', () => {
 
   assert.equal(mainSource.includes('failed to load main window size'), true);
   assert.equal(mainSource.includes('main window size'), true);
+});
+
+test('windows binary is built without a console window', () => {
+  const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+
+  assert.equal(mainSource.includes('#![cfg_attr(windows, windows_subsystem = "windows")]'), true);
+});
+
+test('startup renders both switches off until state is known', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+
+  assert.equal(source.includes('const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
+  assert.equal(source.includes('const lightDisplayOn = hasLoadedState && device.connected && device.lightOn;'), true);
+  assert.equal(source.includes('active={acDisplayOn}'), true);
+  assert.equal(source.includes('active={lightDisplayOn}'), true);
 });
 
 test('tauri window is configured as a single transparent surface', () => {

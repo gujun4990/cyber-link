@@ -208,6 +208,18 @@ export default function App() {
     }
   };
 
+  const dragTopBar = async (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || event.target !== event.currentTarget) {
+      return;
+    }
+
+    try {
+      await appWindow.startDragging();
+    } catch (error) {
+      console.error('Failed to drag window', error);
+    }
+  };
+
   // 底栏状态文案集中计算，避免 JSX 里堆太多条件分支。
   const statusLabel = initFailed
     ? 'OFFLINE_MODE'
@@ -218,6 +230,9 @@ export default function App() {
       : refreshFailed
         ? 'REFRESH_FAILED'
         : 'Encrypted_Link_Stable';
+
+  const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
+  const lightDisplayOn = hasLoadedState && device.connected && device.lightOn;
 
   return (
     <>
@@ -242,6 +257,13 @@ export default function App() {
           {/* 顶栏支持拖拽，右侧按钮区必须禁用拖拽。 */}
           <div
             className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"
+            onMouseDown={(event) => {
+              void dragTopBar(event);
+            }}
+            onDoubleClickCapture={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
           >
             <div className="flex items-center gap-2.5">
               <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/20 border border-cyan-400/30 rounded shadow-[0_0_10px_rgba(6,182,212,0.3)]">
@@ -432,20 +454,20 @@ export default function App() {
 
                       <div className="space-y-5">
                         <TechToggle
-                          active={device.ac.isOn}
+                          active={acDisplayOn}
                           onClick={toggleAC}
                           disabled={!hasLoadedState || !device.acAvailable}
                           label="空调核心系统"
-                          subLabel={device.ac.isOn ? '核心运行中' : '已离线'}
-                          icon={<Fan className={device.ac.isOn ? 'animate-spin' : ''} size={24} />}
+                          subLabel={acDisplayOn ? '核心运行中' : '已离线'}
+                          icon={<Fan className={acDisplayOn ? 'animate-spin' : ''} size={24} />}
                         />
 
                         <TechToggle
-                          active={device.lightOn}
+                          active={lightDisplayOn}
                           onClick={toggleLight}
                           disabled={!hasLoadedState || !device.lightAvailable}
                           label="环境氛围照明"
-                          subLabel={device.lightOn ? '强光已开启' : '低能耗状态'}
+                          subLabel={lightDisplayOn ? '强光已开启' : '低能耗状态'}
                           icon={<Lightbulb size={24} />}
                         />
                       </div>

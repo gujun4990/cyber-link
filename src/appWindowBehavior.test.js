@@ -11,6 +11,16 @@ test('app hides the native window from minimize and close controls', () => {
   assert.equal(appSource.includes('setIsMinimized'), false);
 });
 
+test('top bar supports drag but ignores double click', () => {
+  const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
+  assert.equal(appSource.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/40 border-b border-white/5 backdrop-blur-xl select-none"\n            onMouseDown'), true);
+  assert.equal(appSource.includes('onDoubleClickCapture'), true);
+  assert.equal(appSource.includes('preventDefault()'), true);
+  assert.equal(appSource.includes('stopPropagation()'), true);
+  assert.equal(appSource.includes('appWindow.startDragging()'), true);
+});
+
 test('showing the main window keeps it at card size', () => {
   const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
