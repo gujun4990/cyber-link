@@ -41,7 +41,8 @@
         "decorations": false,
         "transparent": true,
         "center": true,
-        "resizable": true
+        "resizable": false,
+        "maximizable": false
       }
     ]
   }

@@ -937,6 +937,11 @@ mod windows_app {
     }
 
     #[tauri::command]
+    pub fn is_autostart_mode() -> bool {
+        matches!(startup_mode_from_args(std::env::args()), StartupMode::Autostart)
+    }
+
+    #[tauri::command]
     pub async fn initialize_app(
         app: AppHandle,
         state: State<'_, SharedState>,
@@ -1121,6 +1126,7 @@ mod windows_app {
                 Ok(())
             })
             .invoke_handler(tauri::generate_handler![
+                is_autostart_mode,
                 initialize_app,
                 refresh_ha_state,
                 handle_ha_action,

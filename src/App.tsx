@@ -72,6 +72,8 @@ export default function App() {
     let unlisten: null | (() => void) = null;
 
     void (async () => {
+      const autostartMode = await invoke<boolean>('is_autostart_mode');
+
       unlisten = await listen<DeviceState>('state-refresh', (event) => {
         if (!event.payload) {
           return;
@@ -97,7 +99,9 @@ export default function App() {
       });
 
       await appWindow.setSize(new LogicalSize(windowSize.width, windowSize.height));
-      await appWindow.show();
+      if (!autostartMode) {
+        await appWindow.show();
+      }
 
       try {
         await withTimeout(
@@ -233,6 +237,9 @@ export default function App() {
 
   const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
   const lightDisplayOn = hasLoadedState && device.connected && device.lightOn;
+  const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;
+  const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;
+  const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
 
   return (
     <>
@@ -276,7 +283,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex gap-2 items-center" data-tauri-drag-region="false">
+            <div className="flex gap-2 items-center">
               <motion.button
                 whileHover={{ scale: 1.1, color: '#22d3ee' }}
                 whileTap={{ scale: 0.9 }}
@@ -340,13 +347,13 @@ export default function App() {
                         <div className="flex gap-3 mt-1.5 scale-90">
                           <div
                             className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-700 overflow-hidden ${
-                              device.ac.isOn && device.ac.temp < 20
+                              coolingModeActive
                                 ? 'border-cyan-200 bg-cyan-400/40 text-white shadow-[0_0_30px_rgba(6,182,212,0.7),inset_0_0_15px_rgba(255,255,255,0.4)]'
                                 : 'border-white/5 bg-white/2 text-white/10'
                             }`}
                           >
                             <div className="absolute inset-0 circuit-pattern opacity-30 pointer-events-none" />
-                            <Snowflake size={12} className={device.ac.isOn && device.ac.temp < 20 ? 'animate-pulse text-cyan-100' : ''} />
+                            <Snowflake size={12} className={coolingModeActive ? 'animate-pulse text-cyan-100' : ''} />
                             <span className="text-[9px] font-black tracking-widest uppercase z-10 antialiased">
                               制冷模式
                             </span>
@@ -359,12 +366,12 @@ export default function App() {
 
                           <div
                             className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-700 overflow-hidden ${
-                              device.ac.isOn && device.ac.temp > 26
+                              heatingModeActive
                                 ? 'border-orange-400 bg-orange-500/30 text-white shadow-[0_0_20px_rgba(249,115,22,0.4)]'
                                 : 'border-white/5 bg-white/2 text-white/5'
                             }`}
                           >
-                            <Flame size={12} className={device.ac.isOn && device.ac.temp > 26 ? 'animate-pulse text-orange-400' : ''} />
+                            <Flame size={12} className={heatingModeActive ? 'animate-pulse text-orange-400' : ''} />
                             <span className="text-[9px] font-black tracking-widest uppercase antialiased opacity-60">
                               制热模式
                             </span>
@@ -381,14 +388,14 @@ export default function App() {
                       {/* 温度调节区：上下按钮包围数字。 */}
                       <div className="flex items-center gap-2">
                         <motion.button
-                          whileHover={hasLoadedState && device.ac.isOn ? { scale: 1.1, textShadow: '0 0 15px cyan' } : {}}
-                          whileTap={hasLoadedState && device.ac.isOn ? { scale: 0.9 } : {}}
+                          whileHover={tempDisplayOn ? { scale: 1.1, textShadow: '0 0 15px cyan' } : {}}
+                          whileTap={tempDisplayOn ? { scale: 0.9 } : {}}
                           onClick={() => {
                             void adjustTemp(-1);
                           }}
-                          disabled={!hasLoadedState || !device.ac.isOn}
+                          disabled={!tempDisplayOn}
                           className={`p-2 transition-all rounded-full border border-transparent ${
-                            hasLoadedState && device.ac.isOn
+                            tempDisplayOn
                               ? 'text-cyan-100/80 hover:border-cyan-300/40 hover:bg-cyan-400/10 cursor-pointer'
                               : 'text-cyan-950/20 cursor-not-allowed'
                           }`}
@@ -399,12 +406,12 @@ export default function App() {
                         <div className="flex flex-col items-center min-w-[140px] relative">
                           <div
                             className={`absolute inset-0 blur-[50px] rounded-full transition-all duration-1000 ${
-                              device.ac.isOn ? 'bg-cyan-400/20 scale-110' : 'bg-transparent'
+                              tempDisplayOn ? 'bg-cyan-400/20 scale-110' : 'bg-transparent'
                             }`}
                           />
                           <div
                             className={`absolute inset-0 blur-[25px] rounded-full transition-all duration-1000 ${
-                              device.ac.isOn ? 'bg-purple-500/5 scale-125' : 'bg-transparent'
+                              tempDisplayOn ? 'bg-purple-500/5 scale-125' : 'bg-transparent'
                             }`}
                           />
 
@@ -413,10 +420,10 @@ export default function App() {
                             initial={{ opacity: 0, scale: 0.8, filter: 'blur(5px)' }}
                             animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
                             className={`text-[9rem] font-black tabular-nums transition-all duration-700 relative z-20 leading-[1.1] ${
-                              device.ac.isOn ? 'text-iridescent' : 'text-cyan-950/20'
+                              tempDisplayOn ? 'text-iridescent' : 'text-cyan-950/20'
                             }`}
                             style={{
-                              filter: device.ac.isOn ? 'drop-shadow(0 0 20px rgba(6,182,212,0.5))' : 'none',
+                              filter: tempDisplayOn ? 'drop-shadow(0 0 20px rgba(6,182,212,0.5))' : 'none',
                             }}
                           >
                             {device.ac.temp}
@@ -424,14 +431,14 @@ export default function App() {
                         </div>
 
                         <motion.button
-                          whileHover={hasLoadedState && device.ac.isOn ? { scale: 1.1, textShadow: '0 0 15px cyan' } : {}}
-                          whileTap={hasLoadedState && device.ac.isOn ? { scale: 0.9 } : {}}
+                          whileHover={tempDisplayOn ? { scale: 1.1, textShadow: '0 0 15px cyan' } : {}}
+                          whileTap={tempDisplayOn ? { scale: 0.9 } : {}}
                           onClick={() => {
                             void adjustTemp(1);
                           }}
-                          disabled={!hasLoadedState || !device.ac.isOn}
+                          disabled={!tempDisplayOn}
                           className={`p-2 transition-all rounded-full border border-transparent ${
-                            hasLoadedState && device.ac.isOn
+                            tempDisplayOn
                               ? 'text-cyan-100/80 hover:border-cyan-300/40 hover:bg-cyan-400/10 cursor-pointer'
                               : 'text-cyan-950/20 cursor-not-allowed'
                           }`}
@@ -458,7 +465,7 @@ export default function App() {
                           onClick={toggleAC}
                           disabled={!hasLoadedState || !device.acAvailable}
                           label="空调核心系统"
-                          subLabel={acDisplayOn ? '核心运行中' : '已离线'}
+                          subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
                           icon={<Fan className={acDisplayOn ? 'animate-spin' : ''} size={24} />}
                         />
 
@@ -467,7 +474,7 @@ export default function App() {
                           onClick={toggleLight}
                           disabled={!hasLoadedState || !device.lightAvailable}
                           label="环境氛围照明"
-                          subLabel={lightDisplayOn ? '强光已开启' : '低能耗状态'}
+                          subLabel={lightDisplayOn ? '强光已开启' : '已关闭'}
                           icon={<Lightbulb size={24} />}
                         />
                       </div>

@@ -83,8 +83,13 @@ test('startup renders both switches off until state is known', () => {
 
   assert.equal(source.includes('const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
   assert.equal(source.includes('const lightDisplayOn = hasLoadedState && device.connected && device.lightOn;'), true);
+  assert.equal(source.includes('const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;'), true);
+  assert.equal(source.includes('const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;'), true);
+  assert.equal(source.includes('const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
   assert.equal(source.includes('active={acDisplayOn}'), true);
   assert.equal(source.includes('active={lightDisplayOn}'), true);
+  assert.equal(source.includes("subLabel={acDisplayOn ? '核心运行中' : '已关闭'}"), true);
+  assert.equal(source.includes("subLabel={lightDisplayOn ? '强光已开启' : '已关闭'}"), true);
 });
 
 test('tauri window is configured as a single transparent surface', () => {
