@@ -27,6 +27,15 @@ import windowSize from './shared/windowSize.json';
 
 const consoleLogLevels = ['warn', 'error'] as const;
 type ConsoleLogLevel = (typeof consoleLogLevels)[number];
+type ConsoleLogLevelName = Uppercase<ConsoleLogLevel>;
+
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatLogLine(level: ConsoleLogLevelName, message: string) {
+  return `${new Date().toISOString()} [${level}] ${message}`;
+}
 
 interface ACState {
   isOn: boolean;
@@ -63,8 +72,9 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [hasLoadedState, setHasLoadedState] = useState(false);
   const syncingRef = useRef(false);
-  const consoleFallbackRef = useRef<Pick<Console, 'error'>>({
+  const consoleFallbackRef = useRef<Pick<Console, 'error' | 'warn'>>({
     error: console.error.bind(console),
+    warn: console.warn.bind(console),
   });
 
   const logMessage = async (message: string) => {
@@ -73,6 +83,12 @@ export default function App() {
     } catch (error) {
       consoleFallbackRef.current.error('Failed to write app log', error);
     }
+  };
+
+  const reportError = async (message: string, error: unknown) => {
+    const line = formatLogLine('ERROR', `${message}: ${describeError(error)}`);
+    await logMessage(line);
+    consoleFallbackRef.current.error(line);
   };
 
   useEffect(() => {
@@ -87,7 +103,7 @@ export default function App() {
       originals.set(level, original);
       patchedConsole[level] = (...args: unknown[]) => {
         original(...args);
-        void logMessage(`[${level.toUpperCase()}] ${args.map(String).join(' ')}`);
+        void logMessage(formatLogLine(level.toUpperCase() as ConsoleLogLevelName, args.map(String).join(' ')));
       };
     }
 
@@ -148,8 +164,8 @@ export default function App() {
         );
         setHasLoadedState(true);
       } catch (error) {
-        console.error('Failed to initialize Tauri bridge', error);
-        const msg = error instanceof Error ? error.message : String(error);
+        void reportError('Failed to initialize Tauri bridge', error);
+        const msg = describeError(error);
         setInitFailed(true);
         setDevice((prev) => ({ ...prev, connected: false, initError: msg }));
         setHasLoadedState(false);
@@ -175,7 +191,7 @@ export default function App() {
       await invoke<DeviceState>('handle_ha_action', payload);
       setActionFailed(false);
     } catch (error) {
-      console.error('Failed to sync device action', error);
+      void reportError('Failed to sync device action', error);
       setActionFailed(true);
     } finally {
       syncingRef.current = false;
@@ -222,8 +238,8 @@ export default function App() {
       );
       setHasLoadedState(true);
     } catch (error) {
-      console.error('Failed to refresh HA state', error);
-      const msg = error instanceof Error ? error.message : String(error);
+      void reportError('Failed to refresh HA state', error);
+      const msg = describeError(error);
       setRefreshFailed(true);
       setRefreshError(msg);
     } finally {
@@ -236,7 +252,7 @@ export default function App() {
     try {
       await appWindow.hide();
     } catch (error) {
-      console.error('Failed to hide window', error);
+      void reportError('Failed to hide window', error);
     }
   };
 
@@ -245,7 +261,7 @@ export default function App() {
     try {
       await appWindow.hide();
     } catch (error) {
-      console.error('Failed to hide window', error);
+      void reportError('Failed to hide window', error);
     }
   };
 
@@ -257,7 +273,7 @@ export default function App() {
     try {
       await appWindow.startDragging();
     } catch (error) {
-      console.error('Failed to drag window', error);
+      void reportError('Failed to drag window', error);
     }
   };
 
@@ -430,7 +446,7 @@ export default function App() {
                           onClick={() => {
                             void adjustTemp(-1);
                           }}
-                          disabled={!tempDisplayOn}
+                          disabled={!hasLoadedState || !device.connected || !device.acAvailable || !device.ac.isOn}
                           className={`p-2 transition-all rounded-full border border-transparent ${
                             tempDisplayOn
                               ? 'text-cyan-100/80 hover:border-cyan-300/40 hover:bg-cyan-400/10 cursor-pointer'
@@ -473,7 +489,7 @@ export default function App() {
                           onClick={() => {
                             void adjustTemp(1);
                           }}
-                          disabled={!tempDisplayOn}
+                          disabled={!hasLoadedState || !device.connected || !device.acAvailable || !device.ac.isOn}
                           className={`p-2 transition-all rounded-full border border-transparent ${
                             tempDisplayOn
                               ? 'text-cyan-100/80 hover:border-cyan-300/40 hover:bg-cyan-400/10 cursor-pointer'
@@ -500,7 +516,7 @@ export default function App() {
                         <TechToggle
                           active={acDisplayOn}
                           onClick={toggleAC}
-                          disabled={!hasLoadedState || !device.acAvailable}
+                          disabled={!hasLoadedState || !device.connected || !device.acAvailable}
                           label="空调核心系统"
                           subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
                           icon={<Fan className={acDisplayOn ? 'animate-spin' : ''} size={24} />}
@@ -509,7 +525,7 @@ export default function App() {
                         <TechToggle
                           active={lightDisplayOn}
                           onClick={toggleLight}
-                          disabled={!hasLoadedState || !device.lightAvailable}
+                          disabled={!hasLoadedState || !device.connected || !device.lightAvailable}
                           label="环境氛围照明"
                           subLabel={lightDisplayOn ? '强光已开启' : '已关闭'}
                           icon={<Lightbulb size={24} />}

@@ -78,6 +78,8 @@ test('logs are written to the app log command', () => {
   assert.equal(appSource.includes("invoke('append_log_message', { message })"), true);
   assert.equal(appSource.includes("const consoleLogLevels = ['warn', 'error'] as const;"), true);
   assert.equal(appSource.includes("consoleLogLevels = ['log', 'info', 'warn', 'error']"), false);
+  assert.equal(appSource.includes('new Date().toISOString()'), true);
+  assert.equal(appSource.includes('reportError('), true);
 });
 
 test('windows binary is built without a console window', () => {
@@ -94,6 +96,7 @@ test('startup renders both switches off until state is known', () => {
   assert.equal(source.includes('const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;'), true);
   assert.equal(source.includes('const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;'), true);
   assert.equal(source.includes('const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
+  assert.equal(source.includes('disabled={!hasLoadedState || !device.connected || !device.acAvailable}'), true);
   assert.equal(source.includes('active={acDisplayOn}'), true);
   assert.equal(source.includes('active={lightDisplayOn}'), true);
   assert.equal(source.includes("subLabel={acDisplayOn ? '核心运行中' : '已关闭'}"), true);

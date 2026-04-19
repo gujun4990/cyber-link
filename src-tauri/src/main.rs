@@ -11,7 +11,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -235,10 +235,17 @@ fn append_log_line(line: &str) -> Result<()> {
     Ok(())
 }
 
+fn log_timestamp() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}.{:03}", now.as_secs(), now.subsec_millis())
+}
+
 #[allow(dead_code)]
-fn log_line(line: impl AsRef<str>) {
-    let line = line.as_ref();
-    let _ = append_log_line(line);
+fn log_line(level: &str, line: impl AsRef<str>) {
+    let line = format!("{} [{}] {}", log_timestamp(), level, line.as_ref());
+    let _ = append_log_line(&line);
     eprintln!("{line}");
 }
 
@@ -614,55 +621,101 @@ fn offline_snapshot(config: &AppConfig) -> DeviceSnapshot {
     snapshot.ac_available = config.ac_entity_id().is_some();
     snapshot.light_available = config.light_entity_id().is_some();
 
-    if !snapshot.ac_available {
-        snapshot.ac.is_on = false;
-    }
-
-    if !snapshot.light_available {
-        snapshot.light_on = false;
-    }
+    snapshot.ac.is_on = false;
+    snapshot.light_on = false;
 
     snapshot
 }
 
+async fn reconcile_action_snapshot(
+    config: &AppConfig,
+    original: &DeviceSnapshot,
+    optimistic: DeviceSnapshot,
+    action_result: Result<()>,
+) -> Result<(DeviceSnapshot, Option<String>)> {
+    let refresh_result = refresh_snapshot_with_retry(config).await;
+
+    match (action_result, refresh_result) {
+        (Ok(()), Ok(snapshot)) => Ok((
+            if snapshot == *original { optimistic } else { snapshot },
+            None,
+        )),
+        (Ok(()), Err(_)) => Ok((optimistic, None)),
+        (Err(action_err), Ok(snapshot)) => Ok((
+            if snapshot == *original { original.clone() } else { snapshot },
+            Some(action_err.to_string()),
+        )),
+        (Err(action_err), Err(_)) => Ok((original.clone(), Some(action_err.to_string()))),
+    }
+}
+
 #[cfg_attr(not(windows), allow(dead_code))]
+struct ActionApplyOutcome {
+    snapshot: DeviceSnapshot,
+    error: Option<String>,
+}
+
 async fn apply_action(
     config: &AppConfig,
     mut snapshot: DeviceSnapshot,
     args: ActionArgs,
-) -> Result<DeviceSnapshot> {
+) -> Result<ActionApplyOutcome> {
     match args.action.as_str() {
         "ac_toggle" => {
             if config.ac_entity_id().is_none() {
-                return Ok(snapshot);
+                return Ok(ActionApplyOutcome { snapshot, error: None });
             }
+            let original = snapshot.clone();
             let next = !snapshot.ac.is_on;
-            send_ha_request(
+            let result = send_ha_request(
                 config,
                 HaAction::ToggleAc { on: next }.into_request(config)?,
             )
-            .await?;
+            .await;
             snapshot.ac.is_on = next;
+            let (next_snapshot, error) =
+                reconcile_action_snapshot(config, &original, snapshot, result.map(|_| ()))
+                    .await?;
+            return Ok(ActionApplyOutcome {
+                snapshot: next_snapshot,
+                error,
+            });
         }
         "ac_set_temp" => {
             if config.ac_entity_id().is_none() {
-                return Ok(snapshot);
+                return Ok(ActionApplyOutcome { snapshot, error: None });
             }
+            let original = snapshot.clone();
             let temp = args.value.ok_or_else(|| anyhow!("missing temperature"))?;
-            send_ha_request(config, HaAction::SetTemp { temp }.into_request(config)?).await?;
+            let result = send_ha_request(config, HaAction::SetTemp { temp }.into_request(config)?).await;
             snapshot.ac.temp = temp;
+            let (next_snapshot, error) =
+                reconcile_action_snapshot(config, &original, snapshot, result.map(|_| ()))
+                    .await?;
+            return Ok(ActionApplyOutcome {
+                snapshot: next_snapshot,
+                error,
+            });
         }
         "light_toggle" => {
             if config.light_entity_id().is_none() {
-                return Ok(snapshot);
+                return Ok(ActionApplyOutcome { snapshot, error: None });
             }
+            let original = snapshot.clone();
             let next = !snapshot.light_on;
-            send_ha_request(
+            let result = send_ha_request(
                 config,
                 HaAction::ToggleLight { on: next }.into_request(config)?,
             )
-            .await?;
+            .await;
             snapshot.light_on = next;
+            let (next_snapshot, error) =
+                reconcile_action_snapshot(config, &original, snapshot, result.map(|_| ()))
+                    .await?;
+            return Ok(ActionApplyOutcome {
+                snapshot: next_snapshot,
+                error,
+            });
         }
         "startup_online" => {
             send_startup_online(config).await?;
@@ -687,7 +740,7 @@ async fn apply_action(
         _ => return Err(anyhow!("unsupported action: {}", args.action)),
     }
 
-    Ok(snapshot)
+    Ok(ActionApplyOutcome { snapshot, error: None })
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -825,7 +878,7 @@ mod windows_app {
     fn main_window_size() -> Result<WindowSize, String> {
         serde_json::from_str(include_str!("../../src/shared/windowSize.json")).map_err(|err| {
             let message = format!("failed to load main window size: {err}");
-            log_line(&message);
+            log_line("ERROR", &message);
             message
         })
     }
@@ -911,6 +964,7 @@ mod windows_app {
                         },
                     || {
                         log_line(
+                            "WARN",
                             "single-instance mutex exists but main window was not found; skipping duplicate startup",
                         );
                     },
@@ -1058,7 +1112,7 @@ mod windows_app {
                                 if let Err(err) = write_autostart_registry_entry(true) {
                                     // Some locked-down Windows installs deny HKCU Run writes; startup should still continue.
                                     if tolerate_autostart_error(&err) {
-                                        log_line(format!("autostart enable skipped: {err}"));
+                                        log_line("WARN", format!("autostart enable skipped: {err}"));
                                         return Ok(());
                                     }
                                     return Err(anyhow!(err));
@@ -1066,7 +1120,10 @@ mod windows_app {
 
                                 if let Err(err) = verify_autostart_registry_entry() {
                                     if tolerate_autostart_error(&err) {
-                                        log_line(format!("autostart verification skipped: {err}"));
+                                        log_line(
+                                            "WARN",
+                                            format!("autostart verification skipped: {err}"),
+                                        );
                                         return Ok(());
                                     }
                                     return Err(anyhow!(err));
@@ -1087,7 +1144,7 @@ mod windows_app {
             let snapshot = match result {
                 Ok(snapshot) => snapshot,
                 Err(err) => {
-                    log_line(format!("startup bootstrap failed: {err}"));
+                    log_line("ERROR", format!("startup bootstrap failed: {err}"));
                     offline_snapshot(&config_for_task)
                 }
             };
@@ -1107,13 +1164,10 @@ mod windows_app {
         app: AppHandle,
         state: State<'_, SharedState>,
     ) -> Result<DeviceSnapshot, String> {
-        let config = load_config().map_err(|e| e.to_string())?;
-        let snapshot = refresh_snapshot_with_retry(&config)
-            .await
-            .map_err(|err| {
-                log_line(format!("failed to refresh HA state: {err}"));
-                err.to_string()
-            })?;
+            let config = load_config().map_err(|e| e.to_string())?;
+            let snapshot = refresh_snapshot_with_retry(&config)
+                .await
+                .map_err(|err| err.to_string())?;
 
         {
             let mut state = state.0.lock().map_err(|e| e.to_string())?;
@@ -1136,15 +1190,20 @@ mod windows_app {
             let state = state.0.lock().map_err(|e| e.to_string())?;
             state.clone()
         };
-        let next = apply_action(&config, snapshot, ActionArgs { action, value })
+        let outcome = apply_action(&config, snapshot, ActionArgs { action, value })
             .await
             .map_err(|e| e.to_string())?;
         {
             let mut state = state.0.lock().map_err(|e| e.to_string())?;
-            *state = next.clone();
+            *state = outcome.snapshot.clone();
         }
-        emit_state_refresh(&app, &next);
-        Ok(next)
+        emit_state_refresh(&app, &outcome.snapshot);
+
+        if let Some(error) = outcome.error {
+            Err(error)
+        } else {
+            Ok(outcome.snapshot)
+        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -1202,7 +1261,7 @@ mod windows_app {
             .setup(move |app| {
                 if let Some(window) = app.get_window("main") {
                     if let Err(err) = install_shutdown_hook(&window) {
-                        log_line(format!("failed to install shutdown hook: {err}"));
+                        log_line("ERROR", format!("failed to install shutdown hook: {err}"));
                     }
                 }
                 match startup_mode {
@@ -1248,11 +1307,14 @@ mod tests {
         run_best_effort_three, run_serialized_tray_action, set_window_long_ptr_result,
         snapshot_from_home_assistant, snapshot_from_optional_home_assistant,
         snapshot_from_loaded_states, startup_online_targets, startup_window_action,
-        tolerate_autostart_error, try_restore_existing_window, AppConfig, DeviceIds,
-        DeviceSnapshot, HaAction, HaEntityState, StartupMode, StartupWindowAction,
+        tolerate_autostart_error, try_restore_existing_window, ActionArgs, AppConfig,
+        ACState, DeviceIds, DeviceSnapshot, HaAction, HaEntityState, StartupMode,
+        StartupWindowAction, apply_action,
         bootstrap_startup_mode, main_window_title, startup_mode_from_args,
     };
     use anyhow::anyhow;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
     use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex as StdMutex};
@@ -1965,6 +2027,89 @@ mod tests {
         assert_eq!(calls.lock().unwrap().as_slice(), ["startup"]);
     }
 
+    #[tokio::test]
+    async fn ac_toggle_returns_refreshed_state_after_post_disconnect() {
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        std::env::set_var("no_proxy", "127.0.0.1,localhost");
+        std::env::set_var("HTTP_PROXY", "");
+        std::env::set_var("HTTPS_PROXY", "");
+        std::env::set_var("http_proxy", "");
+        std::env::set_var("https_proxy", "");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let ac_is_on = Arc::new(AtomicBool::new(false));
+        let ac_is_on_for_server = Arc::clone(&ac_is_on);
+
+        let server = tokio::spawn(async move {
+            // First request: POST /api/services/climate/turn_on, then drop the connection.
+            let (mut socket, _) = listener.accept().await.expect("accept post");
+            let mut buf = vec![0u8; 4096];
+            let _ = socket.read(&mut buf).await.expect("read post request");
+            ac_is_on_for_server.store(true, Ordering::SeqCst);
+
+            // Drop without a response to simulate a transport error after HA already acted.
+            drop(socket);
+
+            // Second request: the refresh GET should observe the new state.
+            let (mut socket, _) = listener.accept().await.expect("accept refresh");
+            let mut buf = vec![0u8; 4096];
+            let _ = socket.read(&mut buf).await.expect("read refresh request");
+            let body = if ac_is_on_for_server.load(Ordering::SeqCst) {
+                r#"{"state":"cool","attributes":{"temperature":24}}"#
+            } else {
+                r#"{"state":"off","attributes":{}}"#
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write refresh response");
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: None,
+            }),
+        };
+
+        let snapshot = DeviceSnapshot {
+            room: "核心-01".into(),
+            pc_id: "终端-05".into(),
+            ac: ACState { is_on: false, temp: 16 },
+            light_on: false,
+            ac_available: true,
+            light_available: false,
+            connected: true,
+        };
+
+        let outcome = apply_action(
+            &config,
+            snapshot,
+            ActionArgs {
+                action: "ac_toggle".into(),
+                value: None,
+            },
+        )
+        .await
+        .expect("action should recover from transport failure when refresh succeeds");
+
+        server.await.expect("server task");
+
+        assert!(outcome.error.is_some());
+        assert!(outcome.snapshot.ac.is_on);
+        assert_eq!(outcome.snapshot.ac.temp, 24);
+        assert!(outcome.snapshot.connected);
+    }
+
     #[test]
     fn offline_snapshot_marks_disconnected() {
         let config = AppConfig {
@@ -1979,6 +2124,27 @@ mod tests {
         assert!(!snapshot.connected);
         assert!(!snapshot.ac_available);
         assert!(!snapshot.light_available);
+        assert!(!snapshot.ac.is_on);
+        assert!(!snapshot.light_on);
+    }
+
+    #[test]
+    fn offline_snapshot_keeps_configured_devices_off() {
+        let config = AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
+        };
+
+        let snapshot = offline_snapshot(&config);
+
+        assert!(!snapshot.connected);
+        assert!(snapshot.ac_available);
+        assert!(snapshot.light_available);
         assert!(!snapshot.ac.is_on);
         assert!(!snapshot.light_on);
     }
