@@ -30,7 +30,7 @@
 - `src/App.tsx`：React 视觉层和事件驱动状态投影
 - `src/haActions.ts`：动作常量和温度辅助函数
 - `src-tauri/src/main.rs`：Tauri 命令、HA HTTP 请求、托盘、注册表、关机钩子
-- `config.json`：运行时 Home Assistant 配置
+- `config.json`：运行时 Home Assistant 配置，位于 `%LOCALAPPDATA%\\cyber-link\\config.json`
 
 ## 状态流
 
@@ -64,7 +64,7 @@
 
 ## 配置文件
 
-请在应用目录或可执行文件目录创建 `config.json`：
+应用会在启动时主动创建 `%LOCALAPPDATA%\\cyber-link\\` 目录，`config.json` 请放在该目录下：
 
 ```json
 {
@@ -97,7 +97,7 @@
 ## 使用步骤
 
 1. 在 Home Assistant 中创建对应实体
-2. 复制 `config.json` 到应用目录或可执行文件目录
+2. 复制 `config.json` 到 `%LOCALAPPDATA%\\cyber-link\\`
 3. 填入 `ha_url`、`token` 和实体 ID
 4. 启动应用
 5. 确认托盘图标出现，UI 显示在线或离线状态
@@ -163,7 +163,7 @@ Windows 安装包和可执行产物默认位于 `src-tauri/target/release/bundle
 
 ## 故障排查
 
-- **显示离线**：检查 `config.json`、Home Assistant 地址、Token 和网络连通性
+- **显示离线**：检查 `%LOCALAPPDATA%\\cyber-link\\config.json`、Home Assistant 地址、Token 和网络连通性
 - **无法自启动**：检查 `HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` 是否写入成功
 - **关机通知未发送**：确认应用正在 Windows 上运行且托盘钩子已成功安装
 

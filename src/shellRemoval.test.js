@@ -72,6 +72,14 @@ test('window size load failures are logged instead of silently ignored', () => {
   assert.equal(mainSource.includes('main window size'), true);
 });
 
+test('logs are written to the app log command', () => {
+  const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+
+  assert.equal(appSource.includes("invoke('append_log_message', { message })"), true);
+  assert.equal(appSource.includes("const consoleLogLevels = ['warn', 'error'] as const;"), true);
+  assert.equal(appSource.includes("consoleLogLevels = ['log', 'info', 'warn', 'error']"), false);
+});
+
 test('windows binary is built without a console window', () => {
   const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
 

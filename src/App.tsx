@@ -25,6 +25,9 @@ import { applyStateRefresh } from './appState.js';
 import { withTimeout } from './initTimeout.js';
 import windowSize from './shared/windowSize.json';
 
+const consoleLogLevels = ['warn', 'error'] as const;
+type ConsoleLogLevel = (typeof consoleLogLevels)[number];
+
 interface ACState {
   isOn: boolean;
   temp: number;
@@ -60,6 +63,40 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [hasLoadedState, setHasLoadedState] = useState(false);
   const syncingRef = useRef(false);
+  const consoleFallbackRef = useRef<Pick<Console, 'error'>>({
+    error: console.error.bind(console),
+  });
+
+  const logMessage = async (message: string) => {
+    try {
+      await invoke('append_log_message', { message });
+    } catch (error) {
+      consoleFallbackRef.current.error('Failed to write app log', error);
+    }
+  };
+
+  useEffect(() => {
+    const patchedConsole = console as typeof console & Record<
+      ConsoleLogLevel,
+      (...args: unknown[]) => void
+    >;
+    const originals = new Map<ConsoleLogLevel, (...args: unknown[]) => void>();
+
+    for (const level of consoleLogLevels) {
+      const original = console[level].bind(console) as (...args: unknown[]) => void;
+      originals.set(level, original);
+      patchedConsole[level] = (...args: unknown[]) => {
+        original(...args);
+        void logMessage(`[${level.toUpperCase()}] ${args.map(String).join(' ')}`);
+      };
+    }
+
+    return () => {
+      for (const [level, original] of originals) {
+        patchedConsole[level] = original;
+      }
+    };
+  }, []);
 
   // 保持底栏时间每秒刷新一次，和桌面状态感一致。
   useEffect(() => {

@@ -7,6 +7,8 @@ use serde_json::json;
 use std::future::Future;
 use std::{
     fs,
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
     time::Duration,
@@ -24,7 +26,8 @@ pub struct DeviceIds {
 pub struct AppConfig {
     pub ha_url: String,
     pub token: String,
-    pub pc_entity_id: String,
+    #[serde(default)]
+    pub pc_entity_id: Option<String>,
     #[serde(default)]
     pub entity_id: Option<DeviceIds>,
 }
@@ -36,6 +39,10 @@ impl AppConfig {
 
     fn light_entity_id(&self) -> Option<&str> {
         self.entity_id.as_ref().and_then(|ids| ids.light.as_deref())
+    }
+
+    fn pc_entity_id(&self) -> Option<&str> {
+        self.pc_entity_id.as_deref()
     }
 }
 
@@ -146,13 +153,16 @@ impl HaAction {
 }
 
 pub fn build_notification_request(config: &AppConfig, state: bool) -> Result<HaRequest> {
+    let pc_entity_id = config
+        .pc_entity_id()
+        .ok_or_else(|| anyhow!("pc entity is not configured"))?;
     let base = config.ha_url.trim_end_matches('/');
     Ok(HaRequest {
         url: format!(
             "{base}/api/services/input_boolean/{}",
             if state { "turn_on" } else { "turn_off" }
         ),
-        body: json!({"entity_id": config.pc_entity_id}),
+        body: json!({"entity_id": pc_entity_id}),
     })
 }
 
@@ -171,10 +181,22 @@ struct ActionArgs {
     value: Option<i32>,
 }
 
+pub fn resolve_user_app_dir_from_base_dir(base_local_dir: &Path) -> PathBuf {
+    base_local_dir.join("cyber-link")
+}
+
+pub fn ensure_user_app_dir_from_base_dir(base_local_dir: &Path) -> Result<PathBuf> {
+    let app_dir = base_local_dir.join("cyber-link");
+    fs::create_dir_all(&app_dir)?;
+    Ok(app_dir)
+}
+
 pub fn resolve_user_config_path_from_base_dir(base_local_dir: &Path) -> PathBuf {
-    base_local_dir
-        .join("CyberControl_HA_Client")
-        .join("config.json")
+    base_local_dir.join("cyber-link").join("config.json")
+}
+
+pub fn resolve_user_log_path_from_base_dir(base_local_dir: &Path) -> PathBuf {
+    base_local_dir.join("cyber-link").join("app.log")
 }
 
 pub fn resolve_user_config_path() -> Result<PathBuf> {
@@ -183,10 +205,41 @@ pub fn resolve_user_config_path() -> Result<PathBuf> {
     Ok(resolve_user_config_path_from_base_dir(base.data_local_dir()))
 }
 
+pub fn resolve_user_log_path() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow!("failed to resolve user directory"))?;
+    Ok(resolve_user_log_path_from_base_dir(base.data_local_dir()))
+}
+
+pub fn ensure_user_app_dir() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow!("failed to resolve user directory"))?;
+    ensure_user_app_dir_from_base_dir(base.data_local_dir())
+}
+
 pub fn load_config() -> Result<AppConfig> {
     let path = resolve_user_config_path()?;
     let raw = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&raw)?)
+}
+
+#[allow(dead_code)]
+fn append_log_line(line: &str) -> Result<()> {
+    let path = resolve_user_log_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{line}")?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn log_line(line: impl AsRef<str>) {
+    let line = line.as_ref();
+    let _ = append_log_line(line);
+    eprintln!("{line}");
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -229,8 +282,17 @@ fn snapshot_from_ha_state(
     ac_state: Option<&HaEntityState>,
     light_state: Option<&HaEntityState>,
 ) -> DeviceSnapshot {
+    snapshot_from_loaded_states(Some(pc_state), ac_state, light_state)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn snapshot_from_loaded_states(
+    pc_state: Option<&HaEntityState>,
+    ac_state: Option<&HaEntityState>,
+    light_state: Option<&HaEntityState>,
+) -> DeviceSnapshot {
     let mut snapshot = initial_snapshot();
-    snapshot.connected = pc_state.state.eq_ignore_ascii_case("on");
+    snapshot.connected = pc_state.is_some() || ac_state.is_some() || light_state.is_some();
     snapshot.ac_available = ac_state.is_some();
     snapshot.light_available = light_state.is_some();
 
@@ -263,7 +325,11 @@ pub fn snapshot_from_home_assistant(
     let ac_state: HaEntityState = serde_json::from_value(ac_state.clone())?;
     let light_state: HaEntityState = serde_json::from_value(light_state.clone())?;
 
-    Ok(snapshot_from_ha_state(&pc_state, Some(&ac_state), Some(&light_state)))
+    Ok(snapshot_from_loaded_states(
+        Some(&pc_state),
+        Some(&ac_state),
+        Some(&light_state),
+    ))
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -276,8 +342,8 @@ pub fn snapshot_from_optional_home_assistant(
     let ac_state = ac_state.map(|value| serde_json::from_value(value.clone())).transpose()?;
     let light_state = light_state.map(|value| serde_json::from_value(value.clone())).transpose()?;
 
-    Ok(snapshot_from_ha_state(
-        &pc_state,
+    Ok(snapshot_from_loaded_states(
+        Some(&pc_state),
         ac_state.as_ref(),
         light_state.as_ref(),
     ))
@@ -311,21 +377,32 @@ async fn send_ha_notification(config: &AppConfig, state: bool) -> Result<()> {
     send_ha_request_with_timeout(config, request, notification_timeout(state)).await
 }
 
+fn startup_online_targets(config: &AppConfig) -> (bool, bool, bool) {
+    (
+        config.pc_entity_id().is_some(),
+        config.ac_entity_id().is_some(),
+        config.light_entity_id().is_some(),
+    )
+}
+
 #[cfg_attr(not(windows), allow(dead_code))]
 async fn send_startup_online(config: &AppConfig) -> Result<()> {
     let mut first_err: Option<anyhow::Error> = None;
+    let (send_pc, send_ac, send_light) = startup_online_targets(config);
 
-    if let Err(err) = send_ha_notification(config, true).await {
-        first_err = Some(err);
+    if send_pc {
+        if let Err(err) = send_ha_notification(config, true).await {
+            first_err = Some(err);
+        }
     }
 
-    if config.ac_entity_id().is_some() {
+    if send_ac {
         if let Err(err) = send_ha_action(config, HaAction::ToggleAc { on: true }).await {
             first_err.get_or_insert(err);
         }
     }
 
-    if config.light_entity_id().is_some() {
+    if send_light {
         if let Err(err) = send_ha_action(config, HaAction::ToggleLight { on: true }).await {
             first_err.get_or_insert(err);
         }
@@ -339,7 +416,11 @@ async fn send_startup_online(config: &AppConfig) -> Result<()> {
 
 #[cfg_attr(not(windows), allow(dead_code))]
 async fn send_shutdown_signal(config: &AppConfig) -> Result<()> {
-    send_ha_notification(config, false).await
+    if config.pc_entity_id().is_some() {
+        send_ha_notification(config, false).await
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -358,7 +439,6 @@ where
 
 #[cfg_attr(not(windows), allow(dead_code))]
 async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceSnapshot> {
-    let pc_state = fetch_ha_entity_state(config, &config.pc_entity_id).await?;
     let ac_state = match config.ac_entity_id() {
         Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
         None => None,
@@ -367,9 +447,13 @@ async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceSnapshot> {
         Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
         None => None,
     };
+    let pc_state = match config.pc_entity_id() {
+        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
+        None => None,
+    };
 
-    Ok(snapshot_from_ha_state(
-        &pc_state,
+    Ok(snapshot_from_loaded_states(
+        pc_state.as_ref(),
         ac_state.as_ref(),
         light_state.as_ref(),
     ))
@@ -741,7 +825,7 @@ mod windows_app {
     fn main_window_size() -> Result<WindowSize, String> {
         serde_json::from_str(include_str!("../../src/shared/windowSize.json")).map_err(|err| {
             let message = format!("failed to load main window size: {err}");
-            eprintln!("{message}");
+            log_line(&message);
             message
         })
     }
@@ -826,8 +910,8 @@ mod windows_app {
                             let _ = SetForegroundWindow(hwnd);
                         },
                     || {
-                        eprintln!(
-                            "single-instance mutex exists but main window was not found; skipping duplicate startup"
+                        log_line(
+                            "single-instance mutex exists but main window was not found; skipping duplicate startup",
                         );
                     },
                     || std::thread::sleep(Duration::from_millis(50)),
@@ -937,6 +1021,11 @@ mod windows_app {
     }
 
     #[tauri::command]
+    pub fn append_log_message(message: String) -> Result<(), String> {
+        append_log_line(&message).map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
     pub fn is_autostart_mode() -> bool {
         matches!(startup_mode_from_args(std::env::args()), StartupMode::Autostart)
     }
@@ -946,6 +1035,7 @@ mod windows_app {
         app: AppHandle,
         state: State<'_, SharedState>,
     ) -> Result<DeviceSnapshot, String> {
+        ensure_user_app_dir().map_err(|e| e.to_string())?;
         let config = load_config().map_err(|e| e.to_string())?;
         let startup_mode = startup_mode_from_args(std::env::args());
         let snapshot = offline_snapshot(&config);
@@ -968,7 +1058,7 @@ mod windows_app {
                                 if let Err(err) = write_autostart_registry_entry(true) {
                                     // Some locked-down Windows installs deny HKCU Run writes; startup should still continue.
                                     if tolerate_autostart_error(&err) {
-                                        eprintln!("autostart enable skipped: {err}");
+                                        log_line(format!("autostart enable skipped: {err}"));
                                         return Ok(());
                                     }
                                     return Err(anyhow!(err));
@@ -976,7 +1066,7 @@ mod windows_app {
 
                                 if let Err(err) = verify_autostart_registry_entry() {
                                     if tolerate_autostart_error(&err) {
-                                        eprintln!("autostart verification skipped: {err}");
+                                        log_line(format!("autostart verification skipped: {err}"));
                                         return Ok(());
                                     }
                                     return Err(anyhow!(err));
@@ -997,7 +1087,7 @@ mod windows_app {
             let snapshot = match result {
                 Ok(snapshot) => snapshot,
                 Err(err) => {
-                    eprintln!("startup bootstrap failed: {err}");
+                    log_line(format!("startup bootstrap failed: {err}"));
                     offline_snapshot(&config_for_task)
                 }
             };
@@ -1021,7 +1111,7 @@ mod windows_app {
         let snapshot = refresh_snapshot_with_retry(&config)
             .await
             .map_err(|err| {
-                eprintln!("failed to refresh HA state: {err}");
+                log_line(format!("failed to refresh HA state: {err}"));
                 err.to_string()
             })?;
 
@@ -1112,7 +1202,7 @@ mod windows_app {
             .setup(move |app| {
                 if let Some(window) = app.get_window("main") {
                     if let Err(err) = install_shutdown_hook(&window) {
-                        eprintln!("failed to install shutdown hook: {err}");
+                        log_line(format!("failed to install shutdown hook: {err}"));
                     }
                 }
                 match startup_mode {
@@ -1130,7 +1220,8 @@ mod windows_app {
                 initialize_app,
                 refresh_ha_state,
                 handle_ha_action,
-                set_autostart_enabled
+                set_autostart_enabled,
+                append_log_message
             ])
             .run(tauri::generate_context!())
             .expect("error while running tauri application");
@@ -1151,11 +1242,14 @@ mod tests {
         apply_tray_toggle, autostart_registry_value, bootstrap_default_startup,
         build_notification_request, handle_windows_message_kind, hwnd_store_key_from_raw,
         initial_snapshot, notification_timeout, offline_snapshot, query_end_session_result_value,
-        refresh_snapshot_with_retry, resolve_user_config_path_from_base_dir, retry_startup_task,
+        refresh_snapshot_with_retry, resolve_user_config_path_from_base_dir,
+        resolve_user_log_path_from_base_dir, resolve_user_app_dir_from_base_dir,
+        ensure_user_app_dir_from_base_dir, retry_startup_task,
         run_best_effort_three, run_serialized_tray_action, set_window_long_ptr_result,
         snapshot_from_home_assistant, snapshot_from_optional_home_assistant,
-        startup_window_action, tolerate_autostart_error, try_restore_existing_window,
-        AppConfig, DeviceIds, DeviceSnapshot, HaAction, StartupMode, StartupWindowAction,
+        snapshot_from_loaded_states, startup_online_targets, startup_window_action,
+        tolerate_autostart_error, try_restore_existing_window, AppConfig, DeviceIds,
+        DeviceSnapshot, HaAction, HaEntityState, StartupMode, StartupWindowAction,
         bootstrap_startup_mode, main_window_title, startup_mode_from_args,
     };
     use anyhow::anyhow;
@@ -1163,6 +1257,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex as StdMutex};
     use std::time::Duration;
+    use tempfile::tempdir;
 
     fn read_le_u16(bytes: &[u8], offset: usize) -> u16 {
         u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
@@ -1249,7 +1344,7 @@ mod tests {
 
         assert_eq!(config.ha_url, "https://ha.example.local");
         assert_eq!(config.token, "secret");
-        assert_eq!(config.pc_entity_id, "input_boolean.pc_05_online");
+        assert_eq!(config.pc_entity_id.as_deref(), Some("input_boolean.pc_05_online"));
         assert_eq!(
             config.entity_id,
             Some(DeviceIds {
@@ -1269,10 +1364,28 @@ mod tests {
 
         let config: AppConfig = serde_json::from_str(json).expect("config should parse");
 
-        assert_eq!(config.pc_entity_id, "input_boolean.pc_05_online");
+        assert_eq!(config.pc_entity_id.as_deref(), Some("input_boolean.pc_05_online"));
         assert_eq!(config.entity_id, None);
         assert_eq!(config.ac_entity_id(), None);
         assert_eq!(config.light_entity_id(), None);
+    }
+
+    #[test]
+    fn parses_config_without_pc_entity_id() {
+        let json = r#"{
+            "ha_url": "https://ha.example.local",
+            "token": "secret",
+            "entity_id": {
+                "ac": "climate.office_ac",
+                "light": "light.office_light"
+            }
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).expect("config should parse");
+
+        assert_eq!(config.ha_url, "https://ha.example.local");
+        assert_eq!(config.token, "secret");
+        assert!(config.pc_entity_id.is_none());
     }
 
     #[test]
@@ -1280,7 +1393,7 @@ mod tests {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
-            pc_entity_id: "input_boolean.pc_05_online".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
                 light: Some("light.office_light".into()),
@@ -1306,7 +1419,7 @@ mod tests {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
-            pc_entity_id: "input_boolean.pc_05_online".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
                 light: Some("light.office_light".into()),
@@ -1332,7 +1445,7 @@ mod tests {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
-            pc_entity_id: "input_boolean.pc_05_online".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
                 light: Some("light.office_light".into()),
@@ -1356,7 +1469,7 @@ mod tests {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
-            pc_entity_id: "input_boolean.pc_05_online".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
                 light: Some("light.office_light".into()),
@@ -1380,7 +1493,7 @@ mod tests {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
-            pc_entity_id: "input_boolean.pc_05_online".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
                 light: Some("light.office_light".into()),
@@ -1413,9 +1526,45 @@ mod tests {
         assert_eq!(
             resolved,
             PathBuf::from(r"C:\Users\Alice\AppData\Local")
-                .join("CyberControl_HA_Client")
+                .join("cyber-link")
                 .join("config.json")
         );
+    }
+
+    #[test]
+    fn resolves_log_path_from_user_local_app_data() {
+        let resolved = resolve_user_log_path_from_base_dir(Path::new(
+            r"C:\Users\Alice\AppData\Local",
+        ));
+
+        assert_eq!(
+            resolved,
+            PathBuf::from(r"C:\Users\Alice\AppData\Local")
+                .join("cyber-link")
+                .join("app.log")
+        );
+    }
+
+    #[test]
+    fn resolves_app_dir_from_user_local_app_data() {
+        let resolved = resolve_user_app_dir_from_base_dir(Path::new(
+            r"C:\Users\Alice\AppData\Local",
+        ));
+
+        assert_eq!(resolved, PathBuf::from(r"C:\Users\Alice\AppData\Local").join("cyber-link"));
+    }
+
+    #[test]
+    fn ensure_app_dir_creates_the_directory() {
+        let temp = tempdir().expect("temp dir");
+        let base = temp.path().join("Local");
+        std::fs::create_dir_all(&base).expect("base dir");
+
+        let resolved = ensure_user_app_dir_from_base_dir(&base).expect("should create app dir");
+
+        assert_eq!(resolved, base.join("cyber-link"));
+        assert!(resolved.exists());
+        assert!(resolved.is_dir());
     }
 
     #[tokio::test]
@@ -1442,7 +1591,7 @@ mod tests {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
-            pc_entity_id: "input_boolean.pc_05_online".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: None,
         };
 
@@ -1821,7 +1970,7 @@ mod tests {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
-            pc_entity_id: "input_boolean.pc_05_online".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: None,
         };
 
@@ -1877,6 +2026,42 @@ mod tests {
         assert!(!snapshot.light_available);
         assert!(!snapshot.ac.is_on);
         assert!(!snapshot.light_on);
+    }
+
+    #[test]
+    fn builds_snapshot_without_pc_entity_but_keeps_device_states() {
+        let ac_state = HaEntityState {
+            state: "cool".into(),
+            attributes: serde_json::json!({"temperature": 24}),
+        };
+        let light_state = HaEntityState {
+            state: "on".into(),
+            attributes: serde_json::json!({}),
+        };
+
+        let snapshot = snapshot_from_loaded_states(None, Some(&ac_state), Some(&light_state));
+
+        assert!(snapshot.connected);
+        assert!(snapshot.ac_available);
+        assert!(snapshot.light_available);
+        assert!(snapshot.ac.is_on);
+        assert_eq!(snapshot.ac.temp, 24);
+        assert!(snapshot.light_on);
+    }
+
+    #[test]
+    fn startup_online_targets_skip_pc_but_keep_devices_without_pc_entity() {
+        let config = AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
+        };
+
+        assert_eq!(startup_online_targets(&config), (false, true, true));
     }
 
     #[tokio::test]
