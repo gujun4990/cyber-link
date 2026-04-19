@@ -696,7 +696,9 @@ mod windows_app {
         sync::{Mutex, OnceLock},
         time::Duration,
     };
-    use tauri::{AppHandle, Manager, State};
+    use tauri::{
+        CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, WindowEvent,
+    };
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, SetLastError};
     use windows_sys::Win32::System::Threading::CreateMutexW;
@@ -710,6 +712,8 @@ mod windows_app {
 
     static ORIGINAL_WNDPROCS: OnceLock<Mutex<HashMap<isize, isize>>> = OnceLock::new();
     static INSTANCE_MUTEX: OnceLock<usize> = OnceLock::new();
+    const TRAY_OPEN_ID: &str = "tray-open";
+    const TRAY_EXIT_ID: &str = "tray-exit";
 
     fn wndproc_store() -> &'static Mutex<HashMap<isize, isize>> {
         ORIGINAL_WNDPROCS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -721,6 +725,31 @@ mod windows_app {
 
     fn to_wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn show_main_window(app: &AppHandle) {
+        if let Some(window) = app.get_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
+
+    fn build_tray() -> SystemTray {
+        let open = CustomMenuItem::new(TRAY_OPEN_ID.to_string(), "打开");
+        let exit = CustomMenuItem::new(TRAY_EXIT_ID.to_string(), "退出");
+
+        SystemTray::new().with_menu(SystemTrayMenu::new().add_item(open).add_item(exit))
+    }
+
+    fn handle_tray_event(app: &AppHandle, event: SystemTrayEvent) {
+        if let SystemTrayEvent::MenuItemClick { id, .. } = event {
+            match id.as_str() {
+                TRAY_OPEN_ID => show_main_window(app),
+                TRAY_EXIT_ID => app.exit(0),
+                _ => {}
+            }
+        }
     }
 
     fn try_restore_existing_main_window() -> bool {
@@ -1020,6 +1049,14 @@ mod windows_app {
 
         let startup_mode = startup_mode_from_args(std::env::args());
         tauri::Builder::default()
+            .system_tray(build_tray())
+            .on_system_tray_event(handle_tray_event)
+            .on_window_event(|event| {
+                if let WindowEvent::CloseRequested { api, .. } = event.event() {
+                    api.prevent_close();
+                    let _ = event.window().hide();
+                }
+            })
             .manage(SharedState(Mutex::new(initial_snapshot())))
             .setup(move |app| {
                 if let Some(window) = app.get_window("main") {
@@ -1034,10 +1071,7 @@ mod windows_app {
                         }
                     }
                     StartupMode::Manual => {
-                        if let Some(window) = app.get_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        show_main_window(app);
                     }
                 }
                 Ok(())

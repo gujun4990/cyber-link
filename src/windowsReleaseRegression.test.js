@@ -21,21 +21,22 @@ test('tauri config installs NSIS releases for the current user', () => {
   assert.equal(tauriConfig.tauri.bundle.windows.nsis.installMode, 'currentUser');
 });
 
-test('app source carries initialization errors through to the UI', () => {
+test('app source hides the native window from the title buttons', () => {
   const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 
-  assert.match(appSource, /initError\?: string/);
-  assert.match(appSource, /const msg = error instanceof Error \? error\.message : String\(error\);/);
-  assert.match(appSource, /connected: false, initError: msg/);
-  assert.match(appSource, /初始化失败:/);
-  assert.match(appSource, /服务器连接失败/);
+  assert.match(appSource, /const hideWindow = async \(\) =>/);
+  assert.match(appSource, /const minimizeWindow = async \(\) =>/);
+  assert.match(appSource, /await appWindow\.hide\(\);/);
+  assert.match(appSource, /OFFLINE_MODE/);
+  assert.match(appSource, /ACTION_FAILED/);
+  assert.match(appSource, /REFRESH_FAILED/);
 });
 
 test('windows entrypoint restores the existing main window on relaunch', () => {
   const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
 
   assert.match(mainSource, /try_restore_existing_main_window/);
-  assert.match(mainSource, /static INSTANCE_MUTEX: OnceLock<isize> = OnceLock::new\(\);/);
+  assert.match(mainSource, /static INSTANCE_MUTEX: OnceLock<usize> = OnceLock::new\(\);/);
   assert.match(mainSource, /CreateMutexW/);
   assert.match(mainSource, /SetLastError\(0\);/);
   assert.match(mainSource, /ERROR_ALREADY_EXISTS/);
@@ -45,11 +46,16 @@ test('windows entrypoint restores the existing main window on relaunch', () => {
   assert.match(mainSource, /if try_restore_existing_main_window\(\) \{[\s\S]*return;[\s\S]*\}/);
 });
 
-test('windows entrypoint does not wire a system tray icon', () => {
+test('windows entrypoint wires a system tray menu for open and exit', () => {
   const mainSource = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
 
-  assert.equal(mainSource.includes('.system_tray(build_tray())'), false);
-  assert.equal(mainSource.includes('.on_system_tray_event(handle_tray_event)'), false);
+  assert.match(mainSource, /\.system_tray\(build_tray\(\)\)/);
+  assert.match(mainSource, /\.on_system_tray_event\(handle_tray_event\)/);
+  assert.match(mainSource, /TRAY_OPEN_ID/);
+  assert.match(mainSource, /TRAY_EXIT_ID/);
+  assert.match(mainSource, /WindowEvent::CloseRequested/);
+  assert.match(mainSource, /event\.window\(\)\.hide\(\)/);
+  assert.match(mainSource, /app\.exit\(0\)/);
 });
 
 test('release workflow builds frontend before tauri packaging', () => {
