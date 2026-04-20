@@ -310,7 +310,7 @@ export default function App() {
             radial-gradient(circle at 20% 20%, rgba(70, 110, 255, 0.7), transparent 60%),
             linear-gradient(135deg, rgba(30, 50, 120, 0.95), rgba(15, 25, 70, 1))
           `,
-          backdropFilter: "blur(40px) saturate(180%)" // 增加模糊度并提升色彩饱和度
+          backdropFilter: 'none'
         }}
       >
         {/* 窗口边框和材质层，负责整体的客户端壳感。 */}
@@ -381,16 +381,8 @@ export default function App() {
             <div className="relative flex-1 flex items-center justify-around px-12 py-4 overflow-visible">
                   {/* 中央温控盘：视觉核心。 */}
                   <div className="relative flex items-center justify-center w-[360px] h-[360px]">
-                    <motion.div
-                      className="absolute w-[320px] h-[320px] border border-dashed border-cyan-500/25 rounded-full"
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}
-                    />
-                    <motion.div
-                      className="absolute w-[280px] h-[280px] border-2 border-cyan-400/40 rounded-full border-t-transparent border-b-transparent"
-                      animate={{ rotate: -360 }}
-                      transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
-                    />
+                    <div className="absolute w-[320px] h-[320px] border border-dashed border-cyan-500/20 rounded-full" />
+                    <div className="absolute w-[280px] h-[280px] border-2 border-cyan-400/25 rounded-full border-t-transparent border-b-transparent" />
                     <div className="absolute w-[240px] h-[240px] border-4 border-cyan-500/10 rounded-full shadow-[inset_0_0_40px_rgba(6,182,212,0.08)]" />
 
                     <div className="relative z-10 flex flex-col items-center justify-center h-full w-full">
@@ -404,7 +396,7 @@ export default function App() {
                           <div
                             className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-700 overflow-hidden ${
                               coolingModeActive
-                                ? 'border-cyan-100 bg-cyan-400/55 text-white shadow-[0_0_45px_rgba(6,182,212,0.9),inset_0_0_20px_rgba(255,255,255,0.5)]'
+                                ? 'border-cyan-100 bg-cyan-400/55 text-white shadow-[0_0_20px_rgba(6,182,212,0.35)]'
                                 : 'border-white/8 bg-white/2 text-white/15'
                             }`}
                           >
@@ -413,17 +405,12 @@ export default function App() {
                             <span className="text-[9px] font-black tracking-widest uppercase z-10 antialiased">
                               制冷模式
                             </span>
-                            <motion.div
-                              animate={{ x: [-200, 200] }}
-                              transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }}
-                              className="absolute inset-y-0 w-8 bg-white/20 skew-x-12 blur-[1px]"
-                            />
                           </div>
 
                           <div
                             className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-700 overflow-hidden ${
                               heatingModeActive
-                                ? 'border-orange-300 bg-orange-500/40 text-white shadow-[0_0_30px_rgba(249,115,22,0.6)]'
+                                ? 'border-orange-300 bg-orange-500/40 text-white shadow-[0_0_18px_rgba(249,115,22,0.35)]'
                                 : 'border-white/5 bg-white/2 text-white/8'
                             }`}
                           >
@@ -432,11 +419,6 @@ export default function App() {
                               制热模式
                             </span>
                             <div className="absolute inset-0 rounded-lg border border-orange-500/20 pointer-events-none group-hover:border-orange-500/40 transition-colors" />
-                            <motion.div
-                              animate={{ x: [-200, 200] }}
-                              transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }}
-                              className="absolute inset-y-0 w-8 bg-white/10 skew-x-12 blur-[1px]"
-                            />
                           </div>
                         </div>
                       </div>
@@ -511,8 +493,8 @@ export default function App() {
                   <div className="w-64 flex flex-col py-2">
                     <div className="flex flex-col flex-1 justify-center gap-8">
                       <div className="flex items-center gap-3 px-1 mb-2">
-                        <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_18px_white,0_0_30px_rgba(255,255,255,0.4)]" />
-                        <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase drop-shadow-[0_0_15px_cyan]">
+                        <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_10px_white]" />
+                        <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
                           操作开关
                         </span>
                       </div>
@@ -542,17 +524,7 @@ export default function App() {
 
                 {/* 底栏状态条：时间、连接状态、版本标识。 */}
                 <div className="relative px-6 py-4 bg-black/20 text-[10px] flex justify-between items-center tracking-[0.2em] font-black border-t border-white/10 text-white/50 antialiased overflow-hidden">
-                  <div className="absolute top-0 left-0 w-full h-[1px] overflow-hidden opacity-15">
-                    <motion.div
-                      animate={{ x: [0, -1000] }}
-                      transition={{ duration: 30, repeat: Infinity, ease: 'linear' }}
-                      className="whitespace-nowrap font-mono text-[7px] flex gap-8"
-                    >
-                      {Array.from({ length: 20 }).map((_, i) => (
-                        <span key={i}>SYSTEM_CORE_LOAD: {Math.floor(Math.random() * 100)}% - TEMP_STABLE - NODE_READY</span>
-                      ))}
-                    </motion.div>
-                  </div>
+                  <div className="absolute top-0 left-0 w-full h-[1px] overflow-hidden opacity-10 bg-white/10" />
 
                   <div className="flex items-center gap-5 relative z-10">
                     <span className="text-white/80">
@@ -560,11 +532,7 @@ export default function App() {
                     </span>
                     <span className="text-white/30">|</span>
                     <div className="flex items-center gap-2">
-                      <div
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          device.connected ? 'bg-cyan-300 animate-ping opacity-80' : 'bg-rose-300'
-                        }`}
-                      />
+                      <div className={`w-1.5 h-1.5 rounded-full ${device.connected ? 'bg-cyan-300' : 'bg-rose-300'}`} />
                       <span className="text-white/80 uppercase">{statusLabel}</span>
                     </div>
                   </div>
@@ -600,7 +568,7 @@ function TechToggle({
         disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
       } ${
         active
-          ? 'bg-cyan-500/25 border-cyan-400/60 text-white shadow-[0_0_25px_rgba(6,182,212,0.2)]'
+          ? 'bg-cyan-500/25 border-cyan-400/60 text-white shadow-[0_0_16px_rgba(6,182,212,0.12)]'
           : 'bg-[#2a3b7d]/80 border-white/25 text-white/50 shadow-inner ring-white/10'
       }`}
     >
@@ -609,11 +577,11 @@ function TechToggle({
       <div
         className={`p-3 rounded-lg border transition-all duration-700 relative overflow-hidden ${
           active
-            ? 'border-cyan-200 bg-cyan-400/50 shadow-[0_0_30px_rgba(6,182,212,0.85)]'
+            ? 'border-cyan-200 bg-cyan-400/50 shadow-[0_0_14px_rgba(6,182,212,0.35)]'
             : 'border-white/10 bg-white/5 opacity-50'
         }`}
       >
-        <div className={active && label.includes('空调') ? 'animate-spin opacity-80 blur-[1px]' : ''}>{icon}</div>
+        <div>{icon}</div>
       </div>
 
       <div className="flex-1 text-left relative z-10">
@@ -631,13 +599,6 @@ function TechToggle({
           : 'bg-black/40 border border-white/10'
       }`} />
 
-      {active && (
-        <motion.div
-          animate={{ x: [-300, 500] }}
-          transition={{ duration: 5, repeat: Infinity, ease: 'linear' }}
-          className="absolute top-0 right-0 bottom-0 w-32 bg-gradient-to-r from-transparent via-white/12 to-transparent skew-x-[40deg] pointer-events-none"
-        />
-      )}
     </motion.button>
   );
 }
