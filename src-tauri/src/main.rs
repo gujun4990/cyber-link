@@ -1,9 +1,13 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod action;
+mod commands;
+mod ha_client;
+mod models;
+mod snapshot;
+mod temperature;
+
 use anyhow::{anyhow, Result};
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::future::Future;
 use std::{
     fs,
@@ -11,175 +15,18 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeviceIds {
-    #[serde(default)]
-    pub ac: Option<String>,
-    #[serde(default)]
-    pub light: Option<String>,
-}
+use models::{AppConfig, DeviceIds, DeviceSnapshot};
+use snapshot::initial_snapshot;
+#[cfg(windows)]
+use snapshot::offline_snapshot;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppConfig {
-    pub ha_url: String,
-    pub token: String,
-    #[serde(default)]
-    pub pc_entity_id: Option<String>,
-    #[serde(default)]
-    pub entity_id: Option<DeviceIds>,
-}
-
-impl AppConfig {
-    fn ac_entity_id(&self) -> Option<&str> {
-        self.entity_id.as_ref().and_then(|ids| ids.ac.as_deref())
-    }
-
-    fn light_entity_id(&self) -> Option<&str> {
-        self.entity_id.as_ref().and_then(|ids| ids.light.as_deref())
-    }
-
-    fn pc_entity_id(&self) -> Option<&str> {
-        self.pc_entity_id.as_deref()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ACState {
-    pub is_on: bool,
-    pub temp: i32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeviceSnapshot {
-    pub room: String,
-    #[serde(rename = "pcId")]
-    pub pc_id: String,
-    pub ac: ACState,
-    #[serde(rename = "lightOn")]
-    pub light_on: bool,
-    #[serde(rename = "acAvailable")]
-    pub ac_available: bool,
-    #[serde(rename = "lightAvailable")]
-    pub light_available: bool,
-    pub connected: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct HaRequest {
-    pub url: String,
-    pub body: serde_json::Value,
-}
+#[cfg(windows)]
+pub(crate) struct SharedState(pub std::sync::Mutex<DeviceSnapshot>);
 
 const WM_QUERYENDSESSION_MESSAGE: u32 = 0x0011;
-
-#[derive(Debug, Deserialize)]
-struct HaEntityState {
-    state: String,
-    #[serde(default)]
-    attributes: serde_json::Value,
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-static HA_CLIENT: OnceLock<Client> = OnceLock::new();
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn ha_client() -> &'static Client {
-    HA_CLIENT.get_or_init(|| {
-        Client::builder()
-            .pool_idle_timeout(Some(Duration::from_secs(30)))
-            .pool_max_idle_per_host(2)
-            .build()
-            .expect("failed to build Home Assistant client")
-    })
-}
-
-#[derive(Debug, Clone)]
-pub enum HaAction {
-    ToggleAc { on: bool },
-    SetTemp { temp: i32 },
-    ToggleLight { on: bool },
-    StartupOnline,
-    ShutdownSignal,
-}
-
-impl HaAction {
-    pub fn into_request(&self, config: &AppConfig) -> Result<HaRequest> {
-        let base = config.ha_url.trim_end_matches('/');
-        match self {
-            Self::ToggleAc { on } => {
-                let entity_id = config
-                    .ac_entity_id()
-                    .ok_or_else(|| anyhow!("AC entity is not configured"))?;
-                Ok(HaRequest {
-                    url: format!(
-                        "{base}/api/services/climate/{}",
-                        if *on { "turn_on" } else { "turn_off" }
-                    ),
-                    body: json!({"entity_id": entity_id}),
-                })
-            }
-            Self::SetTemp { temp } => {
-                let entity_id = config
-                    .ac_entity_id()
-                    .ok_or_else(|| anyhow!("AC entity is not configured"))?;
-                Ok(HaRequest {
-                    url: format!("{base}/api/services/climate/set_temperature"),
-                    body: json!({
-                        "entity_id": entity_id,
-                        "temperature": temp,
-                    }),
-                })
-            }
-            Self::ToggleLight { on } => {
-                let entity_id = config
-                    .light_entity_id()
-                    .ok_or_else(|| anyhow!("light entity is not configured"))?;
-                Ok(HaRequest {
-                    url: format!(
-                        "{base}/api/services/light/{}",
-                        if *on { "turn_on" } else { "turn_off" }
-                    ),
-                    body: json!({"entity_id": entity_id}),
-                })
-            }
-            Self::StartupOnline | Self::ShutdownSignal => {
-                Err(anyhow!("multi-entity action requires dedicated handler"))
-            }
-        }
-    }
-}
-
-pub fn build_notification_request(config: &AppConfig, state: bool) -> Result<HaRequest> {
-    let pc_entity_id = config
-        .pc_entity_id()
-        .ok_or_else(|| anyhow!("pc entity is not configured"))?;
-    let base = config.ha_url.trim_end_matches('/');
-    Ok(HaRequest {
-        url: format!(
-            "{base}/api/services/input_boolean/{}",
-            if state { "turn_on" } else { "turn_off" }
-        ),
-        body: json!({"entity_id": pc_entity_id}),
-    })
-}
-
-pub fn notification_timeout(state: bool) -> Duration {
-    if state {
-        Duration::from_secs(2)
-    } else {
-        Duration::from_millis(900)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(not(windows), allow(dead_code))]
-struct ActionArgs {
-    action: String,
-    value: Option<i32>,
-}
 
 pub fn resolve_user_app_dir_from_base_dir(base_local_dir: &Path) -> PathBuf {
     base_local_dir.join("cyber-link")
@@ -200,20 +47,22 @@ pub fn resolve_user_log_path_from_base_dir(base_local_dir: &Path) -> PathBuf {
 }
 
 pub fn resolve_user_config_path() -> Result<PathBuf> {
-    let base = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow!("failed to resolve user directory"))?;
-    Ok(resolve_user_config_path_from_base_dir(base.data_local_dir()))
+    let base =
+        directories::BaseDirs::new().ok_or_else(|| anyhow!("failed to resolve user directory"))?;
+    Ok(resolve_user_config_path_from_base_dir(
+        base.data_local_dir(),
+    ))
 }
 
 pub fn resolve_user_log_path() -> Result<PathBuf> {
-    let base = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow!("failed to resolve user directory"))?;
+    let base =
+        directories::BaseDirs::new().ok_or_else(|| anyhow!("failed to resolve user directory"))?;
     Ok(resolve_user_log_path_from_base_dir(base.data_local_dir()))
 }
 
 pub fn ensure_user_app_dir() -> Result<PathBuf> {
-    let base = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow!("failed to resolve user directory"))?;
+    let base =
+        directories::BaseDirs::new().ok_or_else(|| anyhow!("failed to resolve user directory"))?;
     ensure_user_app_dir_from_base_dir(base.data_local_dir())
 }
 
@@ -224,7 +73,7 @@ pub fn load_config() -> Result<AppConfig> {
 }
 
 #[allow(dead_code)]
-fn append_log_line(line: &str) -> Result<()> {
+pub(crate) fn append_log_line(line: &str) -> Result<()> {
     let path = resolve_user_log_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -243,209 +92,10 @@ fn log_timestamp() -> String {
 }
 
 #[allow(dead_code)]
-fn log_line(level: &str, line: impl AsRef<str>) {
+pub(crate) fn log_line(level: &str, line: impl AsRef<str>) {
     let line = format!("{} [{}] {}", log_timestamp(), level, line.as_ref());
     let _ = append_log_line(&line);
     eprintln!("{line}");
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn send_ha_request(config: &AppConfig, request: HaRequest) -> Result<()> {
-    send_ha_request_with_timeout(config, request, Duration::from_secs(2)).await
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn fetch_ha_entity_state(config: &AppConfig, entity_id: &str) -> Result<HaEntityState> {
-    let base = config.ha_url.trim_end_matches('/');
-    Ok(ha_client()
-        .get(format!("{base}/api/states/{entity_id}"))
-        .bearer_auth(&config.token)
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<HaEntityState>()
-        .await?)
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn parse_temperature(attributes: &serde_json::Value) -> Option<i32> {
-    for key in ["temperature", "target_temperature", "current_temperature"] {
-        if let Some(value) = attributes.get(key) {
-            if let Some(temp) = value.as_i64() {
-                return Some(temp as i32);
-            }
-            if let Some(temp) = value.as_f64() {
-                return Some(temp.round() as i32);
-            }
-        }
-    }
-
-    None
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn snapshot_from_ha_state(
-    pc_state: &HaEntityState,
-    ac_state: Option<&HaEntityState>,
-    light_state: Option<&HaEntityState>,
-) -> DeviceSnapshot {
-    snapshot_from_loaded_states(Some(pc_state), ac_state, light_state)
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn snapshot_from_loaded_states(
-    pc_state: Option<&HaEntityState>,
-    ac_state: Option<&HaEntityState>,
-    light_state: Option<&HaEntityState>,
-) -> DeviceSnapshot {
-    let mut snapshot = initial_snapshot();
-    snapshot.connected = pc_state.is_some() || ac_state.is_some() || light_state.is_some();
-    snapshot.ac_available = ac_state.is_some();
-    snapshot.light_available = light_state.is_some();
-
-    if let Some(ac_state) = ac_state {
-        snapshot.ac.is_on = !ac_state.state.eq_ignore_ascii_case("off");
-
-        if let Some(temp) = parse_temperature(&ac_state.attributes) {
-            snapshot.ac.temp = temp;
-        }
-    } else {
-        snapshot.ac.is_on = false;
-    }
-
-    if let Some(light_state) = light_state {
-        snapshot.light_on = light_state.state.eq_ignore_ascii_case("on");
-    } else {
-        snapshot.light_on = false;
-    }
-
-    snapshot
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-pub fn snapshot_from_home_assistant(
-    pc_state: &serde_json::Value,
-    ac_state: &serde_json::Value,
-    light_state: &serde_json::Value,
-) -> Result<DeviceSnapshot> {
-    let pc_state: HaEntityState = serde_json::from_value(pc_state.clone())?;
-    let ac_state: HaEntityState = serde_json::from_value(ac_state.clone())?;
-    let light_state: HaEntityState = serde_json::from_value(light_state.clone())?;
-
-    Ok(snapshot_from_loaded_states(
-        Some(&pc_state),
-        Some(&ac_state),
-        Some(&light_state),
-    ))
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-pub fn snapshot_from_optional_home_assistant(
-    pc_state: &serde_json::Value,
-    ac_state: Option<&serde_json::Value>,
-    light_state: Option<&serde_json::Value>,
-) -> Result<DeviceSnapshot> {
-    let pc_state: HaEntityState = serde_json::from_value(pc_state.clone())?;
-    let ac_state = ac_state.map(|value| serde_json::from_value(value.clone())).transpose()?;
-    let light_state = light_state.map(|value| serde_json::from_value(value.clone())).transpose()?;
-
-    Ok(snapshot_from_loaded_states(
-        Some(&pc_state),
-        ac_state.as_ref(),
-        light_state.as_ref(),
-    ))
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn send_ha_request_with_timeout(
-    config: &AppConfig,
-    request: HaRequest,
-    timeout: Duration,
-) -> Result<()> {
-    ha_client()
-        .post(request.url)
-        .bearer_auth(&config.token)
-        .json(&request.body)
-        .timeout(timeout)
-        .send()
-        .await?
-        .error_for_status()?;
-    Ok(())
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn send_ha_action(config: &AppConfig, action: HaAction) -> Result<()> {
-    send_ha_request(config, action.into_request(config)?).await
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn send_ha_notification(config: &AppConfig, state: bool) -> Result<()> {
-    let request = build_notification_request(config, state)?;
-    send_ha_request_with_timeout(config, request, notification_timeout(state)).await
-}
-
-fn startup_online_targets(config: &AppConfig) -> (bool, bool, bool) {
-    (
-        config.pc_entity_id().is_some(),
-        config.ac_entity_id().is_some(),
-        config.light_entity_id().is_some(),
-    )
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn send_startup_online(config: &AppConfig) -> Result<()> {
-    let mut first_err: Option<anyhow::Error> = None;
-    let (send_pc, send_ac, send_light) = startup_online_targets(config);
-
-    if send_pc {
-        if let Err(err) = send_ha_notification(config, true).await {
-            first_err = Some(err);
-        }
-    }
-
-    if send_ac {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleAc { on: true }).await {
-            first_err.get_or_insert(err);
-        }
-    }
-
-    if send_light {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleLight { on: true }).await {
-            first_err.get_or_insert(err);
-        }
-    }
-
-    match first_err {
-        Some(err) => Err(err),
-        None => Ok(()),
-    }
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn send_shutdown_signal(config: &AppConfig) -> Result<()> {
-    if config.pc_entity_id().is_some() {
-        send_ha_notification(config, false).await?;
-        return Ok(());
-    }
-
-    let mut first_err: Option<anyhow::Error> = None;
-
-    if config.ac_entity_id().is_some() {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleAc { on: false }).await {
-            first_err = Some(err);
-        }
-    }
-
-    if config.light_entity_id().is_some() {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleLight { on: false }).await {
-            first_err.get_or_insert(err);
-        }
-    }
-
-    match first_err {
-        Some(err) => Err(err),
-        None => Ok(()),
-    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -460,28 +110,6 @@ where
     let lock = TRAY_ACTION_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
     let _guard = lock.lock().await;
     action().await;
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceSnapshot> {
-    let ac_state = match config.ac_entity_id() {
-        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
-        None => None,
-    };
-    let light_state = match config.light_entity_id() {
-        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
-        None => None,
-    };
-    let pc_state = match config.pc_entity_id() {
-        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
-        None => None,
-    };
-
-    Ok(snapshot_from_loaded_states(
-        pc_state.as_ref(),
-        ac_state.as_ref(),
-        light_state.as_ref(),
-    ))
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -536,7 +164,11 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    if args.into_iter().skip(1).any(|arg| arg.as_ref() == "--autostart") {
+    if args
+        .into_iter()
+        .skip(1)
+        .any(|arg| arg.as_ref() == "--autostart")
+    {
         StartupMode::Autostart
     } else {
         StartupMode::Manual
@@ -552,7 +184,7 @@ pub fn startup_window_action(mode: StartupMode) -> StartupWindowAction {
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-async fn retry_startup_task<T, F, Fut>(max_attempts: usize, mut task: F) -> Result<T>
+pub(crate) async fn retry_startup_task<T, F, Fut>(max_attempts: usize, mut task: F) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
@@ -569,10 +201,10 @@ where
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-async fn refresh_snapshot_with_retry(config: &AppConfig) -> Result<DeviceSnapshot> {
+pub(crate) async fn refresh_snapshot_with_retry(config: &AppConfig) -> Result<DeviceSnapshot> {
     retry_startup_task(3, || {
         let config = config.clone();
-        async move { fetch_current_snapshot(&config).await }
+        async move { crate::action::fetch_current_snapshot(&config).await }
     })
     .await
 }
@@ -606,7 +238,7 @@ where
     Ok(())
 }
 
-fn tolerate_autostart_error(message: &str) -> bool {
+pub(crate) fn tolerate_autostart_error(message: &str) -> bool {
     message.contains("os error 5")
         || message.contains("Access is denied")
         || message.contains("拒绝访问")
@@ -614,220 +246,6 @@ fn tolerate_autostart_error(message: &str) -> bool {
 
 pub fn autostart_registry_value(exe_path: &Path) -> String {
     format!("\"{}\" --autostart", exe_path.display())
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn initial_snapshot() -> DeviceSnapshot {
-    DeviceSnapshot {
-        room: "核心-01".into(),
-        pc_id: "终端-05".into(),
-        ac: ACState {
-            is_on: true,
-            temp: 16,
-        },
-        light_on: true,
-        ac_available: true,
-        light_available: true,
-        connected: true,
-    }
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-fn offline_snapshot(config: &AppConfig) -> DeviceSnapshot {
-    let mut snapshot = initial_snapshot();
-    snapshot.connected = false;
-    snapshot.ac_available = config.ac_entity_id().is_some();
-    snapshot.light_available = config.light_entity_id().is_some();
-
-    snapshot.ac.is_on = false;
-    snapshot.light_on = false;
-
-    snapshot
-}
-
-#[cfg_attr(any(test, not(windows)), allow(dead_code))]
-const ACTION_CONFIRMATION_INITIAL_DELAY: Duration = Duration::from_secs(2);
-#[cfg_attr(any(test, not(windows)), allow(dead_code))]
-const ACTION_CONFIRMATION_RETRY_COUNT: usize = 5;
-#[cfg_attr(any(test, not(windows)), allow(dead_code))]
-const ACTION_CONFIRMATION_RETRY_INTERVAL: Duration = Duration::from_secs(2);
-
-async fn confirm_action_snapshot_with_delays<F>(
-    config: &AppConfig,
-    original: &DeviceSnapshot,
-    action_error: Option<String>,
-    expected: F,
-    initial_delay: Duration,
-    retry_count: usize,
-    retry_interval: Duration,
-    pending_message: &'static str,
-) -> ActionApplyOutcome
-where
-    F: Fn(&DeviceSnapshot) -> bool,
-{
-    let mut last_snapshot = original.clone();
-    let mut last_error = action_error;
-
-    tokio::time::sleep(initial_delay).await;
-
-    for _ in 0..retry_count {
-        match fetch_current_snapshot(config).await {
-            Ok(snapshot) => {
-                if expected(&snapshot) {
-                    return ActionApplyOutcome {
-                        snapshot,
-                        error: None,
-                    };
-                }
-
-                last_snapshot = snapshot;
-                last_error = Some(pending_message.to_string());
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-
-        tokio::time::sleep(retry_interval).await;
-    }
-
-    ActionApplyOutcome {
-        snapshot: last_snapshot,
-        error: last_error,
-    }
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-struct ActionApplyOutcome {
-    snapshot: DeviceSnapshot,
-    error: Option<String>,
-}
-
-#[cfg_attr(any(test, not(windows)), allow(dead_code))]
-async fn apply_action(
-    config: &AppConfig,
-    snapshot: DeviceSnapshot,
-    args: ActionArgs,
-) -> Result<ActionApplyOutcome> {
-    apply_action_with_delays(
-        config,
-        snapshot,
-        args,
-        ACTION_CONFIRMATION_INITIAL_DELAY,
-        ACTION_CONFIRMATION_RETRY_COUNT,
-        ACTION_CONFIRMATION_RETRY_INTERVAL,
-    )
-    .await
-}
-
-#[cfg_attr(not(windows), allow(dead_code))]
-async fn apply_action_with_delays(
-    config: &AppConfig,
-    mut snapshot: DeviceSnapshot,
-    args: ActionArgs,
-    initial_delay: Duration,
-    retry_count: usize,
-    retry_interval: Duration,
-) -> Result<ActionApplyOutcome> {
-    match args.action.as_str() {
-        "ac_toggle" => {
-            if config.ac_entity_id().is_none() {
-                return Ok(ActionApplyOutcome { snapshot, error: None });
-            }
-            let original = snapshot.clone();
-            let next = !snapshot.ac.is_on;
-            let result = send_ha_request(
-                config,
-                HaAction::ToggleAc { on: next }.into_request(config)?,
-            )
-            .await;
-            snapshot.ac.is_on = next;
-            return Ok(
-                confirm_action_snapshot_with_delays(
-                    config,
-                    &original,
-                    result.err().map(|err| err.to_string()),
-                    move |current| current.ac.is_on == next,
-                    initial_delay,
-                    retry_count,
-                    retry_interval,
-                    "空调尚未进入预期开关状态，继续等待刷新。",
-                )
-                .await,
-            );
-        }
-        "ac_set_temp" => {
-            if config.ac_entity_id().is_none() {
-                return Ok(ActionApplyOutcome { snapshot, error: None });
-            }
-            let original = snapshot.clone();
-            let temp = args.value.ok_or_else(|| anyhow!("missing temperature"))?;
-            let result = send_ha_request(config, HaAction::SetTemp { temp }.into_request(config)?).await;
-            snapshot.ac.temp = temp;
-            return Ok(
-                confirm_action_snapshot_with_delays(
-                    config,
-                    &original,
-                    result.err().map(|err| err.to_string()),
-                    move |current| current.ac.is_on && current.ac.temp == temp,
-                    initial_delay,
-                    retry_count,
-                    retry_interval,
-                    "空调尚未进入预期温度状态，继续等待刷新。",
-                )
-                .await,
-            );
-        }
-        "light_toggle" => {
-            if config.light_entity_id().is_none() {
-                return Ok(ActionApplyOutcome { snapshot, error: None });
-            }
-            let original = snapshot.clone();
-            let next = !snapshot.light_on;
-            let result = send_ha_request(
-                config,
-                HaAction::ToggleLight { on: next }.into_request(config)?,
-            )
-            .await;
-            snapshot.light_on = next;
-            return Ok(
-                confirm_action_snapshot_with_delays(
-                    config,
-                    &original,
-                    result.err().map(|err| err.to_string()),
-                    move |current| current.light_on == next,
-                    initial_delay,
-                    retry_count,
-                    retry_interval,
-                    "环境氛围照明尚未进入预期开关状态，继续等待刷新。",
-                )
-                .await,
-            );
-        }
-        "startup_online" => {
-            send_startup_online(config).await?;
-            snapshot.ac_available = config.ac_entity_id().is_some();
-            snapshot.light_available = config.light_entity_id().is_some();
-
-            if snapshot.ac_available {
-                snapshot.ac.is_on = true;
-            } else {
-                snapshot.ac.is_on = false;
-            }
-
-            if snapshot.light_available {
-                snapshot.light_on = true;
-            } else {
-                snapshot.light_on = false;
-            }
-        }
-        "shutdown_signal" => {
-            send_shutdown_signal(config).await?;
-        }
-        _ => return Err(anyhow!("unsupported action: {}", args.action)),
-    }
-
-    Ok(ActionApplyOutcome { snapshot, error: None })
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -916,6 +334,11 @@ fn main_window_title() -> &'static str {
 #[cfg(windows)]
 mod windows_app {
     use super::*;
+    use crate::commands::{
+        append_log_message, handle_ha_action, initialize_app, is_autostart_mode, refresh_ha_state,
+        set_autostart_enabled,
+    };
+    use serde::Deserialize;
     use std::{
         collections::HashMap,
         mem,
@@ -923,21 +346,18 @@ mod windows_app {
         time::Duration,
     };
     use tauri::{
-        AppHandle, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
+        AppHandle, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu,
         WindowEvent,
     };
-    use serde::Deserialize;
+    use windows_sys::Win32::Foundation::{GetLastError, SetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, SetLastError};
     use windows_sys::Win32::System::Threading::CreateMutexW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, FindWindowW, SetForegroundWindow, SetWindowLongPtrW,
-        SetWindowPos, ShowWindow, GWLP_WNDPROC, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER,
+        SetWindowPos, ShowWindow, GWLP_WNDPROC, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
         WM_NCDESTROY, WNDPROC,
     };
-    use winreg::{enums::*, RegKey};
-
-    pub struct SharedState(pub Mutex<DeviceSnapshot>);
+    use winreg::enums::*;
 
     #[derive(Deserialize)]
     struct WindowSize {
@@ -1043,19 +463,19 @@ mod windows_app {
                         let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
                         (!hwnd.is_null()).then_some(hwnd as usize)
                     },
-                        |hwnd| {
-                            let hwnd = hwnd as HWND;
-                            let _ = ShowWindow(hwnd, SW_RESTORE);
-                            unsafe { apply_main_window_size_to_hwnd(hwnd) };
-                            let _ = SetForegroundWindow(hwnd);
-                        },
+                    |hwnd| {
+                        let hwnd = hwnd as HWND;
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                        unsafe { apply_main_window_size_to_hwnd(hwnd) };
+                        let _ = SetForegroundWindow(hwnd);
+                    },
                     || {
                         log_line(
                             "WARN",
                             "single-instance mutex exists but main window was not found; skipping duplicate startup",
                         );
                     },
-                    || std::thread::sleep(Duration::from_millis(50)),
+                    || std::thread::sleep(std::time::Duration::from_millis(50)),
                 );
             }
         }
@@ -1075,7 +495,8 @@ mod windows_app {
     ) -> LRESULT {
         if handle_windows_message_kind(msg) {
             if let Ok(config) = load_config() {
-                let _ = tauri::async_runtime::block_on(send_shutdown_signal(&config));
+                let _ =
+                    tauri::async_runtime::block_on(crate::action::send_shutdown_signal(&config));
             }
             return query_end_session_result();
         }
@@ -1105,192 +526,13 @@ mod windows_app {
         let hwnd_key = hwnd_store_key(hwnd);
         unsafe {
             SetLastError(0);
-            let prev = SetWindowLongPtrW(
-                hwnd,
-                GWLP_WNDPROC,
-                main_window_proc as *const () as isize,
-            );
+            let prev =
+                SetWindowLongPtrW(hwnd, GWLP_WNDPROC, main_window_proc as *const () as isize);
             let prev = set_window_long_ptr_result(prev, GetLastError())?;
             let mut store = wndproc_store().lock().map_err(|e| e.to_string())?;
             store.insert(hwnd_key, prev);
         }
         Ok(())
-    }
-
-    fn write_autostart_registry_entry(enabled: bool) -> Result<(), String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let value = autostart_registry_value(&exe);
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let (key, _) = hkcu
-            .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
-            .map_err(|e| e.to_string())?;
-
-        if enabled {
-            key.set_value("CyberControl HA Client", &value)
-                .map_err(|e| e.to_string())?;
-        } else {
-            let _ = key.delete_value("CyberControl HA Client");
-        }
-
-        Ok(())
-    }
-
-    fn verify_autostart_registry_entry() -> Result<(), String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let expected = autostart_registry_value(&exe);
-
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let key = hkcu
-            .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
-            .map_err(|e| e.to_string())?;
-
-        let actual: String = key.get_value("CyberControl HA Client").map_err(|e| e.to_string())?;
-        if actual != expected {
-            return Err("autostart registry value mismatch".into());
-        }
-
-        Ok(())
-    }
-
-    fn emit_state_refresh(app: &AppHandle, snapshot: &DeviceSnapshot) {
-        let _ = app.emit_all("state-refresh", snapshot.clone());
-    }
-
-    #[tauri::command]
-    pub fn set_autostart_enabled(enabled: bool) -> Result<(), String> {
-        write_autostart_registry_entry(enabled)
-    }
-
-    #[tauri::command]
-    pub fn append_log_message(message: String) -> Result<(), String> {
-        append_log_line(&message).map_err(|e| e.to_string())
-    }
-
-    #[tauri::command]
-    pub fn is_autostart_mode() -> bool {
-        matches!(startup_mode_from_args(std::env::args()), StartupMode::Autostart)
-    }
-
-    #[tauri::command]
-    pub async fn initialize_app(
-        app: AppHandle,
-        state: State<'_, SharedState>,
-    ) -> Result<DeviceSnapshot, String> {
-        ensure_user_app_dir().map_err(|e| e.to_string())?;
-        let config = load_config().map_err(|e| e.to_string())?;
-        let startup_mode = startup_mode_from_args(std::env::args());
-        let snapshot = offline_snapshot(&config);
-        {
-            let mut state = state.0.lock().map_err(|e| e.to_string())?;
-            *state = snapshot.clone();
-        }
-        emit_state_refresh(&app, &snapshot);
-
-        let app_for_task = app.clone();
-        let config_for_task = config.clone();
-        tauri::async_runtime::spawn(async move {
-            let result = retry_startup_task(3, || {
-                let config = config_for_task.clone();
-                async move {
-                    if matches!(startup_mode, StartupMode::Autostart) {
-                        bootstrap_startup_mode(
-                            StartupMode::Autostart,
-                            || {
-                                if let Err(err) = write_autostart_registry_entry(true) {
-                                    // Some locked-down Windows installs deny HKCU Run writes; startup should still continue.
-                                    if tolerate_autostart_error(&err) {
-                                        log_line("WARN", format!("autostart enable skipped: {err}"));
-                                        return Ok(());
-                                    }
-                                    return Err(anyhow!(err));
-                                }
-
-                                if let Err(err) = verify_autostart_registry_entry() {
-                                    if tolerate_autostart_error(&err) {
-                                        log_line(
-                                            "WARN",
-                                            format!("autostart verification skipped: {err}"),
-                                        );
-                                        return Ok(());
-                                    }
-                                    return Err(anyhow!(err));
-                                }
-
-                                Ok(())
-                            },
-                            || send_startup_online(&config),
-                        )
-                        .await?;
-                    }
-
-                    fetch_current_snapshot(&config).await
-                }
-            })
-            .await;
-
-            let snapshot = match result {
-                Ok(snapshot) => snapshot,
-                Err(err) => {
-                    log_line("ERROR", format!("startup bootstrap failed: {err}"));
-                    offline_snapshot(&config_for_task)
-                }
-            };
-
-            let shared = app_for_task.state::<SharedState>();
-            if let Ok(mut state) = shared.0.lock() {
-                *state = snapshot.clone();
-            }
-            emit_state_refresh(&app_for_task, &snapshot);
-        });
-
-        Ok(snapshot)
-    }
-
-    #[tauri::command]
-    pub async fn refresh_ha_state(
-        app: AppHandle,
-        state: State<'_, SharedState>,
-    ) -> Result<DeviceSnapshot, String> {
-            let config = load_config().map_err(|e| e.to_string())?;
-            let snapshot = refresh_snapshot_with_retry(&config)
-                .await
-                .map_err(|err| err.to_string())?;
-
-        {
-            let mut state = state.0.lock().map_err(|e| e.to_string())?;
-            *state = snapshot.clone();
-        }
-        emit_state_refresh(&app, &snapshot);
-
-        Ok(snapshot)
-    }
-
-    #[tauri::command]
-    pub async fn handle_ha_action(
-        app: AppHandle,
-        state: State<'_, SharedState>,
-        action: String,
-        value: Option<i32>,
-    ) -> Result<DeviceSnapshot, String> {
-        let config = load_config().map_err(|e| e.to_string())?;
-        let snapshot = {
-            let state = state.0.lock().map_err(|e| e.to_string())?;
-            state.clone()
-        };
-        let outcome = apply_action(&config, snapshot, ActionArgs { action, value })
-            .await
-            .map_err(|e| e.to_string())?;
-        {
-            let mut state = state.0.lock().map_err(|e| e.to_string())?;
-            *state = outcome.snapshot.clone();
-        }
-        emit_state_refresh(&app, &outcome.snapshot);
-
-        if let Some(error) = outcome.error {
-            Err(error)
-        } else {
-            Ok(outcome.snapshot)
-        }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -1386,27 +628,25 @@ fn main() {}
 mod tests {
     use super::{
         apply_tray_toggle, autostart_registry_value, bootstrap_default_startup,
-        build_notification_request, handle_windows_message_kind, hwnd_store_key_from_raw,
-        initial_snapshot, notification_timeout, offline_snapshot, query_end_session_result_value,
-        refresh_snapshot_with_retry, resolve_user_config_path_from_base_dir,
-        resolve_user_log_path_from_base_dir, resolve_user_app_dir_from_base_dir,
-        ensure_user_app_dir_from_base_dir, retry_startup_task,
-        run_best_effort_three, run_serialized_tray_action, set_window_long_ptr_result,
-        snapshot_from_home_assistant, snapshot_from_optional_home_assistant,
-        snapshot_from_loaded_states, startup_online_targets, startup_window_action,
-        tolerate_autostart_error, try_restore_existing_window, ActionArgs, AppConfig,
-        ACState, DeviceIds, DeviceSnapshot, HaAction, HaEntityState, StartupMode,
-        StartupWindowAction, apply_action_with_delays, send_shutdown_signal,
-        bootstrap_startup_mode, main_window_title, startup_mode_from_args,
+        bootstrap_startup_mode, ensure_user_app_dir_from_base_dir, handle_windows_message_kind,
+        hwnd_store_key_from_raw, initial_snapshot, main_window_title,
+        query_end_session_result_value, refresh_snapshot_with_retry,
+        resolve_user_app_dir_from_base_dir, resolve_user_config_path_from_base_dir,
+        resolve_user_log_path_from_base_dir, retry_startup_task, run_best_effort_three,
+        run_serialized_tray_action, set_window_long_ptr_result, startup_mode_from_args,
+        startup_window_action, tolerate_autostart_error, try_restore_existing_window, AppConfig,
+        DeviceIds, DeviceSnapshot, StartupMode, StartupWindowAction,
     };
     use anyhow::anyhow;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
-    use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex as StdMutex};
-    use std::time::Duration;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+    };
     use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn read_le_u16(bytes: &[u8], offset: usize) -> u16 {
         u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
@@ -1432,16 +672,22 @@ mod tests {
 
     fn assert_png_payload(index: usize, payload: &[u8], width: u32, height: u32) {
         let decoder = png::Decoder::new(Cursor::new(payload));
-        let mut reader = decoder
-            .read_info()
-            .unwrap_or_else(|error| panic!("directory entry {index} PNG payload should decode: {error}"));
+        let mut reader = decoder.read_info().unwrap_or_else(|error| {
+            panic!("directory entry {index} PNG payload should decode: {error}")
+        });
         let mut decoded = vec![0; reader.output_buffer_size()];
-        let frame = reader
-            .next_frame(&mut decoded)
-            .unwrap_or_else(|error| panic!("directory entry {index} PNG payload should read a frame: {error}"));
+        let frame = reader.next_frame(&mut decoded).unwrap_or_else(|error| {
+            panic!("directory entry {index} PNG payload should read a frame: {error}")
+        });
 
-        assert_eq!(frame.width, width, "directory entry {index} PNG width should match the ICO directory");
-        assert_eq!(frame.height, height, "directory entry {index} PNG height should match the ICO directory");
+        assert_eq!(
+            frame.width, width,
+            "directory entry {index} PNG width should match the ICO directory"
+        );
+        assert_eq!(
+            frame.height, height,
+            "directory entry {index} PNG height should match the ICO directory"
+        );
         assert!(
             frame.buffer_size() > 0,
             "directory entry {index} PNG frame should decode pixel data"
@@ -1449,11 +695,20 @@ mod tests {
     }
 
     fn assert_dib_payload(index: usize, payload: &[u8], width: u32, height: u32, bit_count: u16) {
-        assert!(payload.len() >= 40, "directory entry {index} DIB payload should include a BITMAPINFOHEADER");
+        assert!(
+            payload.len() >= 40,
+            "directory entry {index} DIB payload should include a BITMAPINFOHEADER"
+        );
 
         let header_size = read_le_u32(payload, 0) as usize;
-        assert!(header_size >= 40, "directory entry {index} DIB header should be at least a BITMAPINFOHEADER");
-        assert!(payload.len() >= header_size, "directory entry {index} DIB payload should include the full header");
+        assert!(
+            header_size >= 40,
+            "directory entry {index} DIB header should be at least a BITMAPINFOHEADER"
+        );
+        assert!(
+            payload.len() >= header_size,
+            "directory entry {index} DIB payload should include the full header"
+        );
 
         let dib_width = read_le_i32(payload, 4);
         let dib_height = read_le_i32(payload, 8);
@@ -1462,15 +717,41 @@ mod tests {
         let compression = read_le_u32(payload, 16);
         let declared_bitmap_bytes = read_le_u32(payload, 20) as usize;
 
-        assert_eq!(planes, 1, "directory entry {index} DIB payload should declare one plane");
-        assert_eq!(dib_width.unsigned_abs(), width, "directory entry {index} DIB width should match the ICO directory");
-        assert_ne!(dib_height, 0, "directory entry {index} DIB height should not be zero");
-        assert_eq!(dib_height % 2, 0, "directory entry {index} DIB height should include XOR and AND masks");
+        assert_eq!(
+            planes, 1,
+            "directory entry {index} DIB payload should declare one plane"
+        );
+        assert_eq!(
+            dib_width.unsigned_abs(),
+            width,
+            "directory entry {index} DIB width should match the ICO directory"
+        );
+        assert_ne!(
+            dib_height, 0,
+            "directory entry {index} DIB height should not be zero"
+        );
+        assert_eq!(
+            dib_height % 2,
+            0,
+            "directory entry {index} DIB height should include XOR and AND masks"
+        );
         assert_eq!(dib_height.unsigned_abs() / 2, height, "directory entry {index} DIB height should match the ICO directory once the mask row is excluded");
-        assert_eq!(dib_bit_count, bit_count, "directory entry {index} DIB bit depth should match the ICO directory");
-        assert!(dib_bit_count >= 8, "directory entry {index} DIB should not use a low-color placeholder format");
-        assert!(matches!(compression, 0 | 3), "directory entry {index} DIB compression should be BI_RGB or BI_BITFIELDS");
-        assert!(payload.len() > header_size, "directory entry {index} DIB payload should contain bitmap data after the header");
+        assert_eq!(
+            dib_bit_count, bit_count,
+            "directory entry {index} DIB bit depth should match the ICO directory"
+        );
+        assert!(
+            dib_bit_count >= 8,
+            "directory entry {index} DIB should not use a low-color placeholder format"
+        );
+        assert!(
+            matches!(compression, 0 | 3),
+            "directory entry {index} DIB compression should be BI_RGB or BI_BITFIELDS"
+        );
+        assert!(
+            payload.len() > header_size,
+            "directory entry {index} DIB payload should contain bitmap data after the header"
+        );
         assert!(
             declared_bitmap_bytes == 0 || declared_bitmap_bytes <= payload.len() - header_size,
             "directory entry {index} DIB declared bitmap length should fit inside the payload"
@@ -1493,7 +774,10 @@ mod tests {
 
         assert_eq!(config.ha_url, "https://ha.example.local");
         assert_eq!(config.token, "secret");
-        assert_eq!(config.pc_entity_id.as_deref(), Some("input_boolean.pc_05_online"));
+        assert_eq!(
+            config.pc_entity_id.as_deref(),
+            Some("input_boolean.pc_05_online")
+        );
         assert_eq!(
             config.entity_id,
             Some(DeviceIds {
@@ -1513,7 +797,10 @@ mod tests {
 
         let config: AppConfig = serde_json::from_str(json).expect("config should parse");
 
-        assert_eq!(config.pc_entity_id.as_deref(), Some("input_boolean.pc_05_online"));
+        assert_eq!(
+            config.pc_entity_id.as_deref(),
+            Some("input_boolean.pc_05_online")
+        );
         assert_eq!(config.entity_id, None);
         assert_eq!(config.ac_entity_id(), None);
         assert_eq!(config.light_entity_id(), None);
@@ -1538,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_air_conditioning_turn_on_request() {
+    fn builds_climate_turn_on_request_in_ha_client() {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
@@ -1549,9 +836,7 @@ mod tests {
             }),
         };
 
-        let request = HaAction::ToggleAc { on: true }
-            .into_request(&config)
-            .expect("request");
+        let request = crate::ha_client::climate_turn_on_request(&config).expect("request");
 
         assert_eq!(
             request.url,
@@ -1564,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_air_conditioning_turn_off_request() {
+    fn builds_climate_turn_off_request_in_ha_client() {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
@@ -1575,9 +860,7 @@ mod tests {
             }),
         };
 
-        let request = HaAction::ToggleAc { on: false }
-            .into_request(&config)
-            .expect("request");
+        let request = crate::ha_client::climate_turn_off_request(&config).expect("request");
 
         assert_eq!(
             request.url,
@@ -1590,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_shutdown_signal_request() {
+    fn builds_light_turn_on_request_in_ha_client() {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
@@ -1601,20 +884,71 @@ mod tests {
             }),
         };
 
-        let request = build_notification_request(&config, false).expect("notification request");
+        let request = crate::ha_client::light_turn_on_request(&config).expect("request");
 
         assert_eq!(
             request.url,
-            "https://ha.example.local/api/services/input_boolean/turn_off"
+            "https://ha.example.local/api/services/light/turn_on"
         );
         assert_eq!(
             request.body,
-            serde_json::json!({"entity_id": "input_boolean.pc_05_online"})
+            serde_json::json!({"entity_id": "light.office_light"})
+        );
+    }
+
+    #[test]
+    fn builds_light_turn_off_request_in_ha_client() {
+        let config = AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                light: Some("light.office_light".into()),
+            }),
+        };
+
+        let request = crate::ha_client::light_turn_off_request(&config).expect("request");
+
+        assert_eq!(
+            request.url,
+            "https://ha.example.local/api/services/light/turn_off"
+        );
+        assert_eq!(
+            request.body,
+            serde_json::json!({"entity_id": "light.office_light"})
+        );
+    }
+
+    #[test]
+    fn normalizes_climate_temperature_with_step_and_clamp() {
+        let state = crate::models::HaEntityState {
+            state: "cool".into(),
+            attributes: serde_json::json!({
+                "temperature": 21,
+                "min_temp": 16,
+                "max_temp": 28,
+                "step": 2,
+                "temperature_unit": "°C"
+            }),
+        };
+
+        assert_eq!(
+            crate::ha_client::normalize_climate_temperature(&state, 15),
+            16.0
+        );
+        assert_eq!(
+            crate::ha_client::normalize_climate_temperature(&state, 23),
+            24.0
+        );
+        assert_eq!(
+            crate::ha_client::normalize_climate_temperature(&state, 31),
+            28.0
         );
     }
 
     #[tokio::test]
-    async fn shutdown_signal_with_pc_entity_skips_device_controls() {
+    async fn builds_climate_set_temperature_request_from_current_state() {
         std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
         std::env::set_var("no_proxy", "127.0.0.1,localhost");
         std::env::set_var("HTTP_PROXY", "");
@@ -1624,19 +958,22 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let addr = listener.local_addr().expect("listener addr");
-        let seen = Arc::new(StdMutex::new(Vec::<&'static str>::new()));
-        let seen_for_server = Arc::clone(&seen);
 
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
             let mut buf = vec![0u8; 4096];
             let n = socket.read(&mut buf).await.expect("read request");
             let request = String::from_utf8_lossy(&buf[..n]);
-            if request.contains("/api/services/input_boolean/turn_off") {
-                seen_for_server.lock().unwrap().push("pc");
-            }
+            assert!(request.contains("GET /api/states/climate.office_ac HTTP/1.1"));
+
+            let body = r#"{"state":"cool","attributes":{"temperature":21,"min_temp":16,"max_temp":28,"step":2,"temperature_unit":"°C"}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
             socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .write_all(response.as_bytes())
                 .await
                 .expect("write response");
         });
@@ -1651,119 +988,28 @@ mod tests {
             }),
         };
 
-        assert!(send_shutdown_signal(&config).await.is_ok());
+        let normalized = crate::ha_client::normalized_climate_temperature(&config, 23)
+            .await
+            .expect("normalized temperature");
+        let request = crate::ha_client::climate_set_temperature_request(&config, normalized)
+            .expect("request");
+
         server.await.expect("server task");
-
-        assert_eq!(seen.lock().unwrap().as_slice(), ["pc"]);
-    }
-
-    #[tokio::test]
-    async fn shutdown_signal_without_pc_entity_targets_device_controls() {
-        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-        std::env::set_var("no_proxy", "127.0.0.1,localhost");
-        std::env::set_var("HTTP_PROXY", "");
-        std::env::set_var("HTTPS_PROXY", "");
-        std::env::set_var("http_proxy", "");
-        std::env::set_var("https_proxy", "");
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("listener addr");
-        let seen = Arc::new(StdMutex::new(Vec::<&'static str>::new()));
-        let seen_for_server = Arc::clone(&seen);
-
-        let server = tokio::spawn(async move {
-            for _ in 0..2 {
-                let (mut socket, _) = listener.accept().await.expect("accept");
-                let mut buf = vec![0u8; 4096];
-                let n = socket.read(&mut buf).await.expect("read request");
-                let request = String::from_utf8_lossy(&buf[..n]);
-                if request.contains("/api/services/climate/turn_off") {
-                    seen_for_server.lock().unwrap().push("ac");
-                }
-                if request.contains("/api/services/light/turn_off") {
-                    seen_for_server.lock().unwrap().push("light");
-                }
-                socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                    .await
-                    .expect("write response");
-            }
-        });
-
-        let config = AppConfig {
-            ha_url: format!("http://{addr}"),
-            token: "secret".into(),
-            pc_entity_id: None,
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
-            }),
-        };
-
-        assert!(send_shutdown_signal(&config).await.is_ok());
-        server.await.expect("server task");
-
-        assert_eq!(seen.lock().unwrap().as_slice(), ["ac", "light"]);
-    }
-
-    #[test]
-    fn builds_online_notification_request_for_pc_entity() {
-        let config = AppConfig {
-            ha_url: "https://ha.example.local".into(),
-            token: "secret".into(),
-            pc_entity_id: Some("input_boolean.pc_05_online".into()),
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
-            }),
-        };
-
-        let request = build_notification_request(&config, true).expect("notification request");
 
         assert_eq!(
             request.url,
-            "https://ha.example.local/api/services/input_boolean/turn_on"
+            format!("http://{addr}/api/services/climate/set_temperature")
         );
         assert_eq!(
             request.body,
-            serde_json::json!({"entity_id": "input_boolean.pc_05_online"})
+            serde_json::json!({"entity_id": "climate.office_ac", "temperature": 24})
         );
-    }
-
-    #[test]
-    fn builds_light_turn_off_request() {
-        let config = AppConfig {
-            ha_url: "https://ha.example.local".into(),
-            token: "secret".into(),
-            pc_entity_id: Some("input_boolean.pc_05_online".into()),
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
-            }),
-        };
-
-        let request = HaAction::ToggleLight { on: false }
-            .into_request(&config)
-            .expect("request");
-
-        assert_eq!(request.url, "https://ha.example.local/api/services/light/turn_off");
-        assert_eq!(
-            request.body,
-            serde_json::json!({"entity_id": "light.office_light"})
-        );
-    }
-
-    #[test]
-    fn offline_notification_uses_short_timeout() {
-        assert_eq!(notification_timeout(false), Duration::from_millis(900));
-        assert_eq!(notification_timeout(true), Duration::from_secs(2));
     }
 
     #[test]
     fn resolves_config_path_from_user_local_app_data() {
-        let resolved = resolve_user_config_path_from_base_dir(Path::new(
-            r"C:\Users\Alice\AppData\Local",
-        ));
+        let resolved =
+            resolve_user_config_path_from_base_dir(Path::new(r"C:\Users\Alice\AppData\Local"));
 
         assert_eq!(
             resolved,
@@ -1775,9 +1021,8 @@ mod tests {
 
     #[test]
     fn resolves_log_path_from_user_local_app_data() {
-        let resolved = resolve_user_log_path_from_base_dir(Path::new(
-            r"C:\Users\Alice\AppData\Local",
-        ));
+        let resolved =
+            resolve_user_log_path_from_base_dir(Path::new(r"C:\Users\Alice\AppData\Local"));
 
         assert_eq!(
             resolved,
@@ -1789,11 +1034,13 @@ mod tests {
 
     #[test]
     fn resolves_app_dir_from_user_local_app_data() {
-        let resolved = resolve_user_app_dir_from_base_dir(Path::new(
-            r"C:\Users\Alice\AppData\Local",
-        ));
+        let resolved =
+            resolve_user_app_dir_from_base_dir(Path::new(r"C:\Users\Alice\AppData\Local"));
 
-        assert_eq!(resolved, PathBuf::from(r"C:\Users\Alice\AppData\Local").join("cyber-link"));
+        assert_eq!(
+            resolved,
+            PathBuf::from(r"C:\Users\Alice\AppData\Local").join("cyber-link")
+        );
     }
 
     #[test]
@@ -1856,18 +1103,30 @@ mod tests {
 
     #[test]
     fn manual_startup_shows_the_main_window() {
-        assert_eq!(startup_window_action(StartupMode::Manual), StartupWindowAction::Show);
+        assert_eq!(
+            startup_window_action(StartupMode::Manual),
+            StartupWindowAction::Show
+        );
     }
 
     #[test]
     fn autostart_hides_the_main_window() {
-        assert_eq!(startup_window_action(StartupMode::Autostart), StartupWindowAction::Hide);
+        assert_eq!(
+            startup_window_action(StartupMode::Autostart),
+            StartupWindowAction::Hide
+        );
     }
 
     #[test]
     fn startup_path_returns_single_visible_main_window() {
-        assert_eq!(startup_window_action(StartupMode::Manual), StartupWindowAction::Show);
-        assert_eq!(startup_window_action(StartupMode::Autostart), StartupWindowAction::Hide);
+        assert_eq!(
+            startup_window_action(StartupMode::Manual),
+            StartupWindowAction::Show
+        );
+        assert_eq!(
+            startup_window_action(StartupMode::Autostart),
+            StartupWindowAction::Hide
+        );
 
         let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
             .expect("tauri config should parse");
@@ -1877,10 +1136,24 @@ mod tests {
             .and_then(|windows| windows.as_array())
             .expect("tauri config should declare windows");
 
-        assert_eq!(windows.len(), 1, "app should keep a single main window definition");
-        let main_window = windows.first().expect("tauri config should declare one window");
-        assert_eq!(main_window.get("label").and_then(|label| label.as_str()), Some("main"));
-        assert_eq!(main_window.get("visible").and_then(|visible| visible.as_bool()), Some(false));
+        assert_eq!(
+            windows.len(),
+            1,
+            "app should keep a single main window definition"
+        );
+        let main_window = windows
+            .first()
+            .expect("tauri config should declare one window");
+        assert_eq!(
+            main_window.get("label").and_then(|label| label.as_str()),
+            Some("main")
+        );
+        assert_eq!(
+            main_window
+                .get("visible")
+                .and_then(|visible| visible.as_bool()),
+            Some(false)
+        );
     }
 
     #[test]
@@ -1959,7 +1232,10 @@ mod tests {
     fn builds_registry_value_from_executable_path() {
         let value = autostart_registry_value(Path::new(r"C:\Program Files\Cyber\cyber-link.exe"));
 
-        assert_eq!(value, r#""C:\Program Files\Cyber\cyber-link.exe" --autostart"#);
+        assert_eq!(
+            value,
+            r#""C:\Program Files\Cyber\cyber-link.exe" --autostart"#
+        );
     }
 
     #[test]
@@ -1968,33 +1244,72 @@ mod tests {
         let bytes = std::fs::read(&icon_path).expect("icon should exist");
 
         assert!(bytes.len() >= 6, "icon should include the ico header");
-        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0, "reserved field should be zero");
-        assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), 1, "icon should declare ico resource type");
+        assert_eq!(
+            u16::from_le_bytes([bytes[0], bytes[1]]),
+            0,
+            "reserved field should be zero"
+        );
+        assert_eq!(
+            u16::from_le_bytes([bytes[2], bytes[3]]),
+            1,
+            "icon should declare ico resource type"
+        );
 
         let image_count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
-        assert!(image_count >= 4, "icon should provide multiple image sizes for Windows packaging");
+        assert!(
+            image_count >= 4,
+            "icon should provide multiple image sizes for Windows packaging"
+        );
 
         let directory_len = 6 + image_count * 16;
-        assert!(bytes.len() >= directory_len, "icon directory should fit inside the file");
+        assert!(
+            bytes.len() >= directory_len,
+            "icon directory should fit inside the file"
+        );
 
         let mut sizes = Vec::with_capacity(image_count);
         for index in 0..image_count {
             let entry_offset = 6 + index * 16;
-            let width = if bytes[entry_offset] == 0 { 256 } else { bytes[entry_offset] as u32 };
-            let height = if bytes[entry_offset + 1] == 0 { 256 } else { bytes[entry_offset + 1] as u32 };
+            let width = if bytes[entry_offset] == 0 {
+                256
+            } else {
+                bytes[entry_offset] as u32
+            };
+            let height = if bytes[entry_offset + 1] == 0 {
+                256
+            } else {
+                bytes[entry_offset + 1] as u32
+            };
             let color_count = bytes[entry_offset + 2];
             let reserved = bytes[entry_offset + 3];
             let bit_count = read_le_u16(&bytes, entry_offset + 6);
             let image_size = read_le_u32(&bytes, entry_offset + 8) as usize;
             let image_offset = read_le_u32(&bytes, entry_offset + 12) as usize;
 
-            assert_eq!(reserved, 0, "directory entry {index} reserved field should be zero");
-            assert_eq!(color_count, 0, "directory entry {index} should use true-color image data");
-            assert!(bit_count >= 8, "directory entry {index} should not use a low-color placeholder format");
-            assert!(image_size > 0, "directory entry {index} image payload should not be empty");
-            assert!(image_offset >= directory_len, "directory entry {index} payload should start after the directory");
+            assert_eq!(
+                reserved, 0,
+                "directory entry {index} reserved field should be zero"
+            );
+            assert_eq!(
+                color_count, 0,
+                "directory entry {index} should use true-color image data"
+            );
             assert!(
-                image_offset.checked_add(image_size).is_some_and(|end| end <= bytes.len()),
+                bit_count >= 8,
+                "directory entry {index} should not use a low-color placeholder format"
+            );
+            assert!(
+                image_size > 0,
+                "directory entry {index} image payload should not be empty"
+            );
+            assert!(
+                image_offset >= directory_len,
+                "directory entry {index} payload should start after the directory"
+            );
+            assert!(
+                image_offset
+                    .checked_add(image_size)
+                    .is_some_and(|end| end <= bytes.len()),
                 "directory entry {index} payload should fit inside the file"
             );
 
@@ -2007,27 +1322,38 @@ mod tests {
                 [40, 0, 0, 0, ..] => {
                     assert_dib_payload(index, payload, width, height, bit_count);
                 }
-                _ => panic!("directory entry {index} should begin with PNG data or a BITMAPINFOHEADER"),
+                _ => panic!(
+                    "directory entry {index} should begin with PNG data or a BITMAPINFOHEADER"
+                ),
             }
 
             sizes.push((width, height));
         }
 
-        assert!(sizes.contains(&(16, 16)), "icon should include a 16x16 image");
-        assert!(sizes.contains(&(32, 32)), "icon should include a 32x32 image");
-        assert!(sizes.contains(&(48, 48)), "icon should include a 48x48 image");
-        assert!(sizes.contains(&(256, 256)), "icon should include a 256x256 image");
+        assert!(
+            sizes.contains(&(16, 16)),
+            "icon should include a 16x16 image"
+        );
+        assert!(
+            sizes.contains(&(32, 32)),
+            "icon should include a 32x32 image"
+        );
+        assert!(
+            sizes.contains(&(48, 48)),
+            "icon should include a 48x48 image"
+        );
+        assert!(
+            sizes.contains(&(256, 256)),
+            "icon should include a 256x256 image"
+        );
     }
 
     #[test]
     fn windows_tray_icon_png_uses_rgba_pixels() {
         let icon_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.png");
-        let decoder = png::Decoder::new(
-            std::fs::File::open(&icon_path).expect("tray icon PNG should exist"),
-        );
-        let reader = decoder
-            .read_info()
-            .expect("tray icon PNG should decode");
+        let decoder =
+            png::Decoder::new(std::fs::File::open(&icon_path).expect("tray icon PNG should exist"));
+        let reader = decoder.read_info().expect("tray icon PNG should decode");
 
         assert_eq!(
             reader.info().color_type,
@@ -2039,12 +1365,9 @@ mod tests {
     #[test]
     fn windows_tray_icon_png_matches_expected_tray_asset_dimensions() {
         let icon_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.png");
-        let decoder = png::Decoder::new(
-            std::fs::File::open(&icon_path).expect("tray icon PNG should exist"),
-        );
-        let reader = decoder
-            .read_info()
-            .expect("tray icon PNG should decode");
+        let decoder =
+            png::Decoder::new(std::fs::File::open(&icon_path).expect("tray icon PNG should exist"));
+        let reader = decoder.read_info().expect("tray icon PNG should decode");
 
         assert_eq!(
             reader.info().width,
@@ -2060,9 +1383,8 @@ mod tests {
 
     #[test]
     fn set_window_long_ptr_result_treats_zero_with_error_as_failure() {
-        let err = set_window_long_ptr_result(0, 5).expect_err(
-            "a zero SetWindowLongPtrW result with a non-zero last error should fail",
-        );
+        let err = set_window_long_ptr_result(0, 5)
+            .expect_err("a zero SetWindowLongPtrW result with a non-zero last error should fail");
 
         assert!(
             err.contains("SetWindowLongPtrW"),
@@ -2094,6 +1416,21 @@ mod tests {
     #[test]
     fn shared_shutdown_message_helper_preserves_raw_hwnd_value() {
         assert_eq!(hwnd_store_key_from_raw(0x1234usize), 0x1234isize);
+    }
+
+    #[test]
+    fn invoke_handler_command_names_remain_stable() {
+        assert_eq!(
+            crate::commands::INVOKE_HANDLER_COMMAND_NAMES,
+            [
+                "is_autostart_mode",
+                "initialize_app",
+                "refresh_ha_state",
+                "handle_ha_action",
+                "set_autostart_enabled",
+                "append_log_message",
+            ]
+        );
     }
 
     #[tokio::test]
@@ -2205,212 +1542,6 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(calls.lock().unwrap().as_slice(), ["startup"]);
-    }
-
-    #[tokio::test]
-    async fn ac_toggle_returns_refreshed_state_after_post_disconnect() {
-        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-        std::env::set_var("no_proxy", "127.0.0.1,localhost");
-        std::env::set_var("HTTP_PROXY", "");
-        std::env::set_var("HTTPS_PROXY", "");
-        std::env::set_var("http_proxy", "");
-        std::env::set_var("https_proxy", "");
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("listener addr");
-        let ac_is_on = Arc::new(AtomicBool::new(false));
-        let ac_is_on_for_server = Arc::clone(&ac_is_on);
-
-        let server = tokio::spawn(async move {
-            // First request: POST /api/services/climate/turn_on, then drop the connection.
-            let (mut socket, _) = listener.accept().await.expect("accept post");
-            let mut buf = vec![0u8; 4096];
-            let _ = socket.read(&mut buf).await.expect("read post request");
-            ac_is_on_for_server.store(true, Ordering::SeqCst);
-
-            // Drop without a response to simulate a transport error after HA already acted.
-            drop(socket);
-
-            // Second request: the refresh GET should observe the new state.
-            let (mut socket, _) = listener.accept().await.expect("accept refresh");
-            let mut buf = vec![0u8; 4096];
-            let _ = socket.read(&mut buf).await.expect("read refresh request");
-            let body = if ac_is_on_for_server.load(Ordering::SeqCst) {
-                r#"{"state":"cool","attributes":{"temperature":24}}"#
-            } else {
-                r#"{"state":"off","attributes":{}}"#
-            };
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .expect("write refresh response");
-        });
-
-        let config = AppConfig {
-            ha_url: format!("http://{addr}"),
-            token: "secret".into(),
-            pc_entity_id: None,
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                light: None,
-            }),
-        };
-
-        let snapshot = DeviceSnapshot {
-            room: "核心-01".into(),
-            pc_id: "终端-05".into(),
-            ac: ACState { is_on: false, temp: 16 },
-            light_on: false,
-            ac_available: true,
-            light_available: false,
-            connected: true,
-        };
-
-        let outcome = apply_action_with_delays(
-            &config,
-            snapshot,
-            ActionArgs {
-                action: "ac_toggle".into(),
-                value: None,
-            },
-            Duration::ZERO,
-            1,
-            Duration::ZERO,
-        )
-        .await
-        .expect("action should recover from transport failure when refresh succeeds");
-
-        server.await.expect("server task");
-
-        assert!(outcome.error.is_none());
-        assert!(outcome.snapshot.ac.is_on);
-        assert_eq!(outcome.snapshot.ac.temp, 24);
-        assert!(outcome.snapshot.connected);
-    }
-
-    #[test]
-    fn offline_snapshot_marks_disconnected() {
-        let config = AppConfig {
-            ha_url: "https://ha.example.local".into(),
-            token: "secret".into(),
-            pc_entity_id: Some("input_boolean.pc_05_online".into()),
-            entity_id: None,
-        };
-
-        let snapshot = offline_snapshot(&config);
-
-        assert!(!snapshot.connected);
-        assert!(!snapshot.ac_available);
-        assert!(!snapshot.light_available);
-        assert!(!snapshot.ac.is_on);
-        assert!(!snapshot.light_on);
-    }
-
-    #[test]
-    fn offline_snapshot_keeps_configured_devices_off() {
-        let config = AppConfig {
-            ha_url: "https://ha.example.local".into(),
-            token: "secret".into(),
-            pc_entity_id: Some("input_boolean.pc_05_online".into()),
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
-            }),
-        };
-
-        let snapshot = offline_snapshot(&config);
-
-        assert!(!snapshot.connected);
-        assert!(snapshot.ac_available);
-        assert!(snapshot.light_available);
-        assert!(!snapshot.ac.is_on);
-        assert!(!snapshot.light_on);
-    }
-
-    #[test]
-    fn builds_snapshot_from_home_assistant_entity_states() {
-        let pc_state = serde_json::json!({
-            "state": "on",
-            "attributes": {}
-        });
-        let ac_state = serde_json::json!({
-            "state": "cool",
-            "attributes": {
-                "temperature": 24
-            }
-        });
-        let light_state = serde_json::json!({
-            "state": "off",
-            "attributes": {}
-        });
-
-        let snapshot = snapshot_from_home_assistant(&pc_state, &ac_state, &light_state)
-            .expect("snapshot should build");
-
-        assert!(snapshot.connected);
-        assert!(snapshot.ac_available);
-        assert!(snapshot.light_available);
-        assert!(snapshot.ac.is_on);
-        assert_eq!(snapshot.ac.temp, 24);
-        assert!(!snapshot.light_on);
-    }
-
-    #[test]
-    fn builds_snapshot_when_ac_and_light_are_missing() {
-        let pc_state = serde_json::json!({
-            "state": "on",
-            "attributes": {}
-        });
-
-        let snapshot = snapshot_from_optional_home_assistant(&pc_state, None, None)
-            .expect("snapshot should build");
-
-        assert!(snapshot.connected);
-        assert!(!snapshot.ac_available);
-        assert!(!snapshot.light_available);
-        assert!(!snapshot.ac.is_on);
-        assert!(!snapshot.light_on);
-    }
-
-    #[test]
-    fn builds_snapshot_without_pc_entity_but_keeps_device_states() {
-        let ac_state = HaEntityState {
-            state: "cool".into(),
-            attributes: serde_json::json!({"temperature": 24}),
-        };
-        let light_state = HaEntityState {
-            state: "on".into(),
-            attributes: serde_json::json!({}),
-        };
-
-        let snapshot = snapshot_from_loaded_states(None, Some(&ac_state), Some(&light_state));
-
-        assert!(snapshot.connected);
-        assert!(snapshot.ac_available);
-        assert!(snapshot.light_available);
-        assert!(snapshot.ac.is_on);
-        assert_eq!(snapshot.ac.temp, 24);
-        assert!(snapshot.light_on);
-    }
-
-    #[test]
-    fn startup_online_targets_skip_pc_but_keep_devices_without_pc_entity() {
-        let config = AppConfig {
-            ha_url: "https://ha.example.local".into(),
-            token: "secret".into(),
-            pc_entity_id: None,
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
-            }),
-        };
-
-        assert_eq!(startup_online_targets(&config), (false, true, true));
     }
 
     #[tokio::test]

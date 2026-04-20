@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@400;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -24,6 +23,7 @@ body {
       linear-gradient(45deg, rgba(0,0,0,0.2) 25%, transparent 25%, transparent 75%, rgba(0,0,0,0.2) 75%, rgba(0,0,0,0.2));
     background-size: 4px 4px;
     background-position: 0 0, 2px 2px;
+    opacity: 0.1; /* 降低透明度，让纹理更细腻 */
   }
 
   .bg-brushed-metal {
@@ -49,8 +49,8 @@ body {
     background: linear-gradient(
       135deg, 
       #ffffff 0%, 
-      #bae6fd 25%, 
-      #ddd6fe 50%, 
+      #e0f2fe 25%, /* 替换为更浅的蓝 */
+      #f5f3ff 50%, /* 替换为更浅的紫 */
       #bae6fd 75%, 
       #ffffff 100%
     );

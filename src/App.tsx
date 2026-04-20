@@ -309,14 +309,15 @@ export default function App() {
           width: windowSize.width,
           height: windowSize.height,
           background: `
-            linear-gradient(135deg, rgba(18, 32, 72, 0.90), rgba(10, 20, 60, 0.95)),
-            rgba(14, 26, 80, 1)
+            radial-gradient(circle at 20% 20%, rgba(70, 110, 255, 0.7), transparent 60%),
+            linear-gradient(135deg, rgba(30, 50, 120, 0.95), rgba(15, 25, 70, 1))
           `,
+          backdropFilter: "blur(40px) saturate(180%)" // 增加模糊度并提升色彩饱和度
         }}
       >
         {/* 窗口边框和材质层，负责整体的客户端壳感。 */}
         <div className="absolute inset-0 rounded-xl border border-white/10 pointer-events-none z-50" />
-        <div className="absolute inset-0 bg-carbon mix-blend-soft-light opacity-20 pointer-events-none" />
+        <div className="absolute inset-0 bg-carbon mix-blend-soft-light opacity-5 pointer-events-none" />
 
           {/* 顶栏支持拖拽，右侧按钮区必须禁用拖拽。 */}
           <div
@@ -334,8 +335,8 @@ export default function App() {
                 <Monitor size={14} className="text-cyan-300" />
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] font-black tracking-widest text-white antialiased uppercase">
-                  Cyber Terminal v0.9
+                <span className="text-[10px] font-black tracking-widest text-white/70 antialiased uppercase">
+                  Cyber Link v1.0
                 </span>
               </div>
             </div>
@@ -396,7 +397,7 @@ export default function App() {
 
                     <div className="relative z-10 flex flex-col items-center justify-center h-full w-full">
                       <div className="absolute top-4 flex flex-col items-center gap-1">
-                        <span className="text-[11px] font-black tracking-[0.5em] text-white/70 uppercase font-sans drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]">
+                        <span className="text-[11px] font-black tracking-[0.5em] text-white/100 uppercase font-sans drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]">
                           空调控制系统
                         </span>
 
@@ -477,12 +478,12 @@ export default function App() {
                             initial={{ opacity: 0, scale: 0.8, filter: 'blur(5px)' }}
                             animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
                             className={`text-[9rem] font-black tabular-nums transition-all duration-700 relative z-20 leading-[1.1] ${
-                              tempDisplayOn ? 'text-iridescent' : 'text-cyan-950/20'
+                              tempDisplayOn ? 'text-iridescent' : 'text-white/10'
                             }`}
                             style={{
                               filter: tempDisplayOn
-                                ? 'drop-shadow(0 0 35px rgba(6,182,212,0.85)) drop-shadow(0 0 60px rgba(6,182,212,0.4))'
-                                : 'none',
+                                ? 'drop-shadow(0 0 35px rgba(6,182,212,0.85))'
+                                : 'drop-shadow(0 0 10px rgba(255,255,255,0.05))',
                             }}
                           >
                             {device.ac.temp}
@@ -557,19 +558,18 @@ export default function App() {
 
                   <div className="flex items-center gap-5 relative z-10">
                     <span className="text-white/80">
-                      TIME: <span className="font-mono">{currentTime.toLocaleTimeString('zh-CN', { hour12: false })}</span>
+                      当前时间: <span className="font-mono">{currentTime.toLocaleTimeString('zh-CN', { hour12: false })}</span>
                     </span>
-                    <span className="text-white/15">|</span>
+                    <span className="text-white/30">|</span>
                     <div className="flex items-center gap-2">
                       <div
                         className={`w-1.5 h-1.5 rounded-full ${
                           device.connected ? 'bg-cyan-300 animate-ping opacity-80' : 'bg-rose-300'
                         }`}
                       />
-                      <span className="text-white/60 uppercase">{statusLabel}</span>
+                      <span className="text-white/80 uppercase">{statusLabel}</span>
                     </div>
                   </div>
-                  <span className="text-white/20 tracking-[0.4em] font-mono">B_CTL_V9</span>
                 </div>
               </div>
       </motion.div>
@@ -598,31 +598,31 @@ function TechToggle({
       whileTap={{ scale: 0.96 }}
       onClick={onClick}
       disabled={disabled}
-      className={`relative w-full p-4 rounded-xl border transition-all duration-700 flex items-center gap-5 overflow-hidden group ${
+      className={`relative w-full p-4 rounded-xl border ring-1 ring-white/5 transition-all duration-700 flex items-center gap-5 overflow-hidden group ${
         disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
       } ${
         active
           ? 'bg-cyan-500/25 border-cyan-400/60 text-white shadow-[0_0_25px_rgba(6,182,212,0.2)]'
-          : 'bg-[#0a153a]/60 border-white/8 text-white/25'
+          : 'bg-[#2a3b7d]/80 border-white/25 text-white/50 shadow-inner ring-white/10'
       }`}
     >
-      <div className="absolute inset-0 bg-carbon mix-blend-overlay opacity-10 pointer-events-none" />
+      <div className="absolute inset-0 bg-carbon mix-blend-overlay opacity-5 pointer-events-none" />
 
       <div
         className={`p-3 rounded-lg border transition-all duration-700 relative overflow-hidden ${
           active
             ? 'border-cyan-200 bg-cyan-400/50 shadow-[0_0_30px_rgba(6,182,212,0.85)]'
-            : 'border-white/5 bg-white/2 opacity-30'
+            : 'border-white/10 bg-white/5 opacity-50'
         }`}
       >
         <div className={active && label.includes('空调') ? 'animate-spin opacity-80 blur-[1px]' : ''}>{icon}</div>
       </div>
 
       <div className="flex-1 text-left relative z-10">
-        <div className={`text-[14px] font-black tracking-[0.1em] font-sans antialiased transition-colors duration-500 ${active ? 'text-white' : 'text-white/25'}`}>
+        <div className={`text-[14px] font-black tracking-[0.1em] font-sans antialiased transition-colors duration-500 ${active ? 'text-white' : 'text-white/70'}`}>
           {label}
         </div>
-        <div className={`text-[10px] font-bold mt-0.5 font-sans opacity-70 transition-colors duration-500 ${active ? 'text-cyan-100' : 'text-white/12'}`}>
+        <div className={`text-[10px] font-bold mt-0.5 font-sans transition-colors duration-500 ${active ? 'text-cyan-100 opacity-90' : 'text-white/60'}`}>
           {subLabel}
         </div>
       </div>
