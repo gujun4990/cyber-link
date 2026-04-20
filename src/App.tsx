@@ -281,14 +281,14 @@ export default function App() {
 
   // 底栏状态文案集中计算，避免 JSX 里堆太多条件分支。
   const statusLabel = initFailed
-    ? 'OFFLINE_MODE'
+    ? '离线模式'
     : !hasLoadedState
       ? '系统初始化中'
     : actionFailed
-      ? 'ACTION_FAILED'
+      ? '操作失败'
       : refreshFailed
-        ? 'REFRESH_FAILED'
-        : 'Encrypted_Link_Stable';
+        ? '刷新失败'
+        : '系统稳定';
 
   const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
   const lightDisplayOn = hasLoadedState && device.connected && device.lightOn;
