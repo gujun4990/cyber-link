@@ -42,12 +42,12 @@ fn write_autostart_registry_entry(enabled: bool) -> Result<(), String> {
 
     if enabled {
         key.set_value(
-            "CyberControl HA Client",
+            "CyberLink",
             &crate::autostart_registry_value(&exe),
         )
         .map_err(|e| e.to_string())?;
     } else {
-        let _ = key.delete_value("CyberControl HA Client");
+        let _ = key.delete_value("CyberLink");
     }
 
     Ok(())
@@ -64,7 +64,7 @@ fn verify_autostart_registry_entry() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let actual: String = key
-        .get_value("CyberControl HA Client")
+        .get_value("CyberLink")
         .map_err(|e| e.to_string())?;
     if actual != expected {
         return Err("autostart registry value mismatch".into());

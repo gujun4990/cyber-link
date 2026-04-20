@@ -106,7 +106,7 @@ Expected: FAIL because the window is still resizable in config.
 ```json
 {
   "label": "main",
-  "title": "CyberControl HA Client",
+        "title": "CyberLink",
   "visible": false,
   "decorations": false,
   "transparent": true,

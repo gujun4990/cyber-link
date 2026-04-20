@@ -50,13 +50,13 @@ Expected: Vite build completes successfully and writes files under `dist/`.
 - [ ] **Step 1: Replace the template page title**
 
 ```html
-<title>CyberControl HA Client</title>
+<title>CyberLink</title>
 ```
 
 - [ ] **Step 2: Verify the updated title is present in source**
 
 Run: inspect `index.html`
-Expected: the document title matches `CyberControl HA Client`.
+Expected: the document title matches `CyberLink`.
 
 ### Task 3: Final Verification
 

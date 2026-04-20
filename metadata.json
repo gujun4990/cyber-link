@@ -1,5 +1,5 @@
 {
-  "name": "CyberControl HA Client",
+  "name": "CyberLink",
   "description": "A Windows-style Home Assistant client for internet cafe environment control, featuring AC and lighting management.",
   "requestFramePermissions": [],
   "majorCapabilities": []

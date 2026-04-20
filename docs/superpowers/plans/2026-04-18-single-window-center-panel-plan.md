@@ -147,7 +147,7 @@ Expected: PASS, and the app renders only the center panel region.
     "windows": [
       {
         "label": "main",
-        "title": "CyberControl HA Client",
+        "title": "CyberLink",
         "visible": false,
         "decorations": false,
         "transparent": true,

@@ -324,7 +324,7 @@ fn main_window_title() -> &'static str {
                         .as_str()
                         .map(|title| title.to_string())
                 })
-                .unwrap_or_else(|| "CyberControl HA Client".to_string())
+                .unwrap_or_else(|| "CyberLink".to_string())
         })
         .as_str()
 }
@@ -438,7 +438,7 @@ mod windows_app {
     }
 
     fn try_restore_existing_main_window() -> bool {
-        const INSTANCE_MUTEX_NAME: &str = "Local\\CyberControl_HA_Client_SingleInstance";
+        const INSTANCE_MUTEX_NAME: &str = "Local\\CyberLink_SingleInstance";
 
         unsafe {
             SetLastError(0);
@@ -1088,11 +1088,11 @@ mod tests {
     #[test]
     fn parses_autostart_mode_from_args() {
         assert!(matches!(
-            startup_mode_from_args(["CyberControl_HA_Client.exe", "--autostart"]),
+            startup_mode_from_args(["CyberLink.exe", "--autostart"]),
             StartupMode::Autostart
         ));
         assert!(matches!(
-            startup_mode_from_args(["CyberControl_HA_Client.exe"]),
+            startup_mode_from_args(["CyberLink.exe"]),
             StartupMode::Manual
         ));
     }

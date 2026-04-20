@@ -102,7 +102,7 @@ test('tauri window is configured as a single transparent surface', () => {
     "windows": [
       {
         "label": "main",
-        "title": "CyberControl HA Client",
+        "title": "CyberLink",
         "visible": false,
         "decorations": false,
         "transparent": true,
