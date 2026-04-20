@@ -7,18 +7,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
 import { appWindow, LogicalSize } from '@tauri-apps/api/window';
-import {
-  ChevronDown,
-  ChevronUp,
-  Fan,
-  Flame,
-  Lightbulb,
-  Minus,
-  Monitor,
-  RefreshCw,
-  Snowflake,
-  X,
-} from 'lucide-react';
+import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.js';
+import ChevronUp from 'lucide-react/dist/esm/icons/chevron-up.js';
+import Fan from 'lucide-react/dist/esm/icons/fan.js';
+import Flame from 'lucide-react/dist/esm/icons/flame.js';
+import Lightbulb from 'lucide-react/dist/esm/icons/lightbulb.js';
+import Minus from 'lucide-react/dist/esm/icons/minus.js';
+import Monitor from 'lucide-react/dist/esm/icons/monitor.js';
+import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw.js';
+import Snowflake from 'lucide-react/dist/esm/icons/snowflake.js';
+import X from 'lucide-react/dist/esm/icons/x.js';
 import { motion } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
 import { applyStateRefresh } from './appState.js';
