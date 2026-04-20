@@ -12,7 +12,7 @@ anyhow = "1"
 directories = "5"
 tempfile = { version = "3", optional = true }
 futures-util = "0.3"
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [features]
 default = ["system-tray", "custom-protocol"]
