@@ -18,6 +18,8 @@ use crate::{
     append_log_line, ensure_user_app_dir, load_config, log_line, refresh_snapshot_with_retry,
     retry_startup_task, startup_mode_from_args, tolerate_autostart_error, SharedState, StartupMode,
 };
+#[cfg(windows)]
+use crate::ha_events::spawn_state_listener_once;
 
 #[cfg(windows)]
 use crate::{models::DeviceSnapshot, snapshot::offline_snapshot};
@@ -107,6 +109,7 @@ pub async fn initialize_app(
         *state = snapshot.clone();
     }
     emit_state_refresh(&app, &snapshot);
+    spawn_state_listener_once(app.clone(), config.clone());
 
     let app_for_task = app.clone();
     let config_for_task = config.clone();

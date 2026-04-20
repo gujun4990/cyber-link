@@ -2,6 +2,7 @@
 
 mod action;
 mod commands;
+mod ha_events;
 mod ha_client;
 mod models;
 mod snapshot;
