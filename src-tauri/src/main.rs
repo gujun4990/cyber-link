@@ -19,10 +19,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use models::{AppConfig, DeviceIds, DeviceSnapshot};
+use models::{AppConfig, DeviceSnapshot};
+#[cfg(test)]
+use models::DeviceIds;
 use snapshot::initial_snapshot;
-#[cfg(windows)]
-use snapshot::offline_snapshot;
 
 #[cfg(windows)]
 pub(crate) struct SharedState(pub std::sync::Mutex<DeviceSnapshot>);
@@ -344,7 +344,6 @@ mod windows_app {
         collections::HashMap,
         mem,
         sync::{Mutex, OnceLock},
-        time::Duration,
     };
     use tauri::{
         AppHandle, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu,
@@ -358,7 +357,6 @@ mod windows_app {
         SetWindowPos, ShowWindow, GWLP_WNDPROC, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
         WM_NCDESTROY, WNDPROC,
     };
-    use winreg::enums::*;
 
     #[derive(Deserialize)]
     struct WindowSize {
@@ -467,7 +465,7 @@ mod windows_app {
                     |hwnd| {
                         let hwnd = hwnd as HWND;
                         let _ = ShowWindow(hwnd, SW_RESTORE);
-                        unsafe { apply_main_window_size_to_hwnd(hwnd) };
+                        apply_main_window_size_to_hwnd(hwnd);
                         let _ = SetForegroundWindow(hwnd);
                     },
                     || {

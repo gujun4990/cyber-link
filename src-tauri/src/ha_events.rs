@@ -40,7 +40,7 @@ mod windows_listener {
     use super::{entity_id_from_state_changed_event, should_refresh_snapshot, websocket_url_from_http_url};
     use crate::{log_line, refresh_snapshot_with_retry, models::AppConfig, SharedState};
     use futures_util::{SinkExt, StreamExt};
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::sync::OnceLock;
     use std::time::Duration;
     use tauri::{AppHandle, Manager};
