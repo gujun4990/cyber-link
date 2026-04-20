@@ -9,6 +9,7 @@ mod snapshot;
 mod temperature;
 
 use anyhow::{anyhow, Result};
+use chrono::{SecondsFormat, Utc};
 use std::future::Future;
 use std::{
     fs,
@@ -16,7 +17,6 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use models::{AppConfig, DeviceSnapshot};
@@ -86,10 +86,7 @@ pub(crate) fn append_log_line(line: &str) -> Result<()> {
 }
 
 fn log_timestamp() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}.{:03}", now.as_secs(), now.subsec_millis())
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 #[allow(dead_code)]
@@ -628,7 +625,7 @@ mod tests {
     use super::{
         apply_tray_toggle, autostart_registry_value, bootstrap_default_startup,
         bootstrap_startup_mode, ensure_user_app_dir_from_base_dir, handle_windows_message_kind,
-        hwnd_store_key_from_raw, initial_snapshot, main_window_title,
+        hwnd_store_key_from_raw, initial_snapshot, log_timestamp, main_window_title,
         query_end_session_result_value, refresh_snapshot_with_retry,
         resolve_user_app_dir_from_base_dir, resolve_user_config_path_from_base_dir,
         resolve_user_log_path_from_base_dir, retry_startup_task, run_best_effort_three,
@@ -1169,6 +1166,15 @@ mod tests {
             .expect("tauri config should declare a window title");
 
         assert_eq!(main_window_title(), expected);
+    }
+
+    #[test]
+    fn log_timestamp_uses_rfc3339_utc_with_millis() {
+        let timestamp = log_timestamp();
+
+        assert_eq!(timestamp.len(), 24, "timestamp should include millisecond precision");
+        assert_eq!(timestamp.chars().nth(10), Some('T'));
+        assert!(timestamp.ends_with('Z'), "timestamp should be in UTC");
     }
 
     #[test]
