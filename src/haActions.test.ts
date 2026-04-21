@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { clampTemp, buildActionPayload } from './haActions.ts';
+import { ACTIONS, clampTemp, buildActionPayload } from './haActions.ts';
 
 test('clamps temperature changes to the supported range', () => {
   assert.equal(clampTemp(16, -1), 16);
@@ -11,4 +11,8 @@ test('clamps temperature changes to the supported range', () => {
 test('builds startup and shutdown payloads', () => {
   assert.deepEqual(buildActionPayload('startup'), { action: 'startup_online' });
   assert.deepEqual(buildActionPayload('shutdown'), { action: 'shutdown_signal' });
+});
+
+test('uses the switch toggle action payload string', () => {
+  assert.equal(ACTIONS.switchToggle, 'switch_toggle');
 });

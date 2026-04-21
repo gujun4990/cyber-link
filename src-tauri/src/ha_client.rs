@@ -33,27 +33,37 @@ fn entity_id<'a>(config: &'a AppConfig, is_ac: bool) -> Result<&'a str> {
             .ok_or_else(|| anyhow!("AC entity is not configured"))?
     } else {
         config
-            .light_entity_id()
-            .ok_or_else(|| anyhow!("light entity is not configured"))?
+            .switch_entity_id()
+            .ok_or_else(|| anyhow!("switch entity is not configured"))?
     };
 
     Ok(entity_id)
 }
 
-fn climate_request(config: &AppConfig, service: &str) -> Result<HaRequest> {
-    let entity_id = entity_id(config, true)?;
+fn entity_domain(entity_id: &str) -> Result<&str> {
+    entity_id
+        .split_once('.')
+        .map(|(domain, _)| domain)
+        .ok_or_else(|| anyhow!("entity_id must contain a domain prefix"))
+}
+
+fn generic_request(config: &AppConfig, entity_id: &str, service: &str) -> Result<HaRequest> {
+    let domain = entity_domain(entity_id)?;
+
     Ok(HaRequest {
-        url: format!("{}/api/services/climate/{}", base_url(config), service),
+        url: format!("{}/api/services/{}/{}", base_url(config), domain, service),
         body: request_body(entity_id),
     })
 }
 
-fn light_request(config: &AppConfig, service: &str) -> Result<HaRequest> {
+fn climate_request(config: &AppConfig, service: &str) -> Result<HaRequest> {
+    let entity_id = entity_id(config, true)?;
+    generic_request(config, entity_id, service)
+}
+
+fn switch_request(config: &AppConfig, service: &str) -> Result<HaRequest> {
     let entity_id = entity_id(config, false)?;
-    Ok(HaRequest {
-        url: format!("{}/api/services/light/{}", base_url(config), service),
-        body: request_body(entity_id),
-    })
+    generic_request(config, entity_id, service)
 }
 
 pub fn climate_turn_on_request(config: &AppConfig) -> Result<HaRequest> {
@@ -64,12 +74,12 @@ pub fn climate_turn_off_request(config: &AppConfig) -> Result<HaRequest> {
     climate_request(config, "turn_off")
 }
 
-pub fn light_turn_on_request(config: &AppConfig) -> Result<HaRequest> {
-    light_request(config, "turn_on")
+pub fn switch_turn_on_request(config: &AppConfig) -> Result<HaRequest> {
+    switch_request(config, "turn_on")
 }
 
-pub fn light_turn_off_request(config: &AppConfig) -> Result<HaRequest> {
-    light_request(config, "turn_off")
+pub fn switch_turn_off_request(config: &AppConfig) -> Result<HaRequest> {
+    switch_request(config, "turn_off")
 }
 
 pub async fn normalized_climate_temperature(config: &AppConfig, requested: i32) -> Result<i32> {
@@ -143,5 +153,31 @@ fn temperature_json_value(temperature: f64) -> Value {
         json!(temperature as i64)
     } else {
         json!(temperature)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_config() -> AppConfig {
+        AppConfig {
+            ha_url: "https://ha.example.local".into(),
+            token: "secret".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
+            entity_id: Some(crate::models::DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                switch: Some("switch.office_light".into()),
+            }),
+        }
+    }
+
+    #[test]
+    fn generic_request_uses_entity_prefix_as_domain() {
+        let request = generic_request(&sample_config(), "switch.office_light", "turn_on")
+            .expect("request");
+
+        assert_eq!(request.url, "https://ha.example.local/api/services/switch/turn_on");
+        assert_eq!(request.body, serde_json::json!({"entity_id": "switch.office_light"}));
     }
 }

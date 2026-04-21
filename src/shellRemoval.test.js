@@ -16,53 +16,43 @@ test('App root renders the card as the only visible surface', () => {
   const returnStmt = appFn.body?.statements.find(ts.isReturnStatement);
   const returned = returnStmt?.expression;
   const jsxNode = returned && ts.isParenthesizedExpression(returned) ? returned.expression : returned;
-  assert.ok(jsxNode && ts.isJsxFragment(jsxNode));
+  assert.ok(jsxNode && ts.isJsxElement(jsxNode));
 
-  const visibleChildren = jsxNode.children.filter((child) => {
-    return !ts.isJsxText(child) || child.getText(sf).trim().length > 0;
-  });
-
-  assert.equal(visibleChildren.length, 1);
-  assert.ok(ts.isJsxElement(visibleChildren[0]) || ts.isJsxSelfClosingElement(visibleChildren[0]));
-
-  const card = visibleChildren[0];
-  const opening = ts.isJsxElement(card) ? card.openingElement : card;
-  const tagName = opening.tagName.getText(sf);
-  assert.equal(tagName, 'motion.div');
+  const opening = jsxNode.openingElement;
+  assert.equal(opening.tagName.getText(sf), 'motion.div');
 
   const className = opening.attributes.properties
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'className');
   assert.ok(className && ts.isJsxAttribute(className));
   assert.match(className.initializer?.getText(sf) ?? '', /fixed inset-0 m-auto/);
+  assert.match(className.initializer?.getText(sf) ?? '', /overflow-hidden flex flex-col/);
   assert.equal(className.initializer?.getText(sf).includes('rounded-xl'), false);
   assert.equal(source.includes('bg-[#020617]/40'), false);
   assert.equal(source.includes('flex items-center justify-center p-4 bg-[#020617]/40'), false);
-  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-xl select-none"\n            onMouseDown'), true);
-  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-xl select-none"\n            data-tauri-drag-region'), false);
+  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-sm select-none"\n        onMouseDown'), true);
+  assert.equal(source.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-sm select-none"\n        data-tauri-drag-region'), false);
 
   const styleAttr = opening.attributes.properties
     .find((attr) => ts.isJsxAttribute(attr) && attr.name.text === 'style');
   assert.ok(styleAttr && ts.isJsxAttribute(styleAttr));
-  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(14, 26, 80, 1\)/);
-  assert.match(styleAttr.initializer?.getText(sf) ?? '', /rgba\(18, 32, 72, 0\.90\)/);
-  assert.equal(styleAttr.initializer?.getText(sf).includes('backdropFilter'), false);
+  assert.match(styleAttr.initializer?.getText(sf) ?? '', /appShellStyle/);
 
   assert.equal(source.includes('flex min-h-screen items-center justify-center p-4 overflow-hidden'), false);
   assert.equal(source.includes('<div className="flex min-h-screen items-center justify-center p-4 overflow-hidden">'), false);
   assert.equal(source.includes('w-64 flex flex-col py-2'), true);
-  assert.equal(source.includes('底栏状态条'), true);
+  assert.equal(source.includes('当前时间'), true);
   assert.equal(source.includes('currentTime.toLocaleTimeString'), true);
 });
 
 test('card background keeps the blue translucent treatment', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 
-  assert.equal(source.includes('rgba(14, 26, 80, 1)'), true);
-  assert.equal(source.includes('rgba(6,182,212,0.25)'), true);
+  assert.equal(source.includes('rgba(28, 48, 118, 0.97)'), true);
+  assert.equal(source.includes('rgba(15, 25, 70, 1)'), true);
   assert.equal(source.includes("import windowSize from './shared/windowSize.json';"), true);
   assert.equal(source.includes('width: windowSize.width,'), true);
   assert.equal(source.includes('height: windowSize.height,'), true);
-  assert.match(source, /background: `\s*linear-gradient\(135deg, rgba\(18, 32, 72, 0\.90\), rgba\(10, 20, 60, 0\.95\)\),\s*rgba\(14, 26, 80, 1\)\s*`/);
+  assert.match(source, /background: `\s*radial-gradient\(circle at 20% 20%, rgba\(70, 110, 255, 0\.5\), transparent 55%\),\s*linear-gradient\(135deg, rgba\(28, 48, 118, 0\.97\), rgba\(15, 25, 70, 1\)\)\s*`/);
 });
 
 test('window size load failures are logged instead of silently ignored', () => {
@@ -92,7 +82,7 @@ test('startup renders both switches off until state is known', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 
   assert.equal(source.includes('const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
-  assert.equal(source.includes('const lightDisplayOn = hasLoadedState && device.connected && device.lightOn;'), true);
+  assert.equal(source.includes('const switchDisplayOn = hasLoadedState && device.connected && device.switchOn;'), true);
   assert.equal(source.includes('const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;'), true);
   assert.equal(source.includes('const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;'), true);
   assert.equal(source.includes('const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
@@ -100,9 +90,9 @@ test('startup renders both switches off until state is known', () => {
   assert.equal(source.includes('syncingAction || !device.connected || !device.acAvailable'), true);
   assert.equal(source.includes('disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}'), true);
   assert.equal(source.includes('active={acDisplayOn}'), true);
-  assert.equal(source.includes('active={lightDisplayOn}'), true);
+  assert.equal(source.includes('active={switchDisplayOn}'), true);
   assert.equal(source.includes("subLabel={acDisplayOn ? '核心运行中' : '已关闭'}"), true);
-  assert.equal(source.includes("subLabel={lightDisplayOn ? '强光已开启' : '已关闭'}"), true);
+  assert.equal(source.includes("subLabel={switchDisplayOn ? '强光已开启' : '已关闭'}"), true);
 });
 
 test('tauri window is configured as a single transparent surface', () => {

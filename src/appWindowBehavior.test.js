@@ -21,10 +21,10 @@ test('top bar supports drag but ignores double click', () => {
   assert.equal(appSource.includes('appWindow.startDragging()'), true);
 });
 
-test('top bar supports drag but ignores double click', () => {
+test('top bar supports drag with no native drag region', () => {
   const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 
-  assert.equal(appSource.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-xl select-none"\n            onMouseDown'), true);
+  assert.equal(appSource.includes('className="relative z-[70] flex items-center justify-between px-4 py-3 bg-black/20 border-b border-white/10 backdrop-blur-sm select-none"\n        onMouseDown'), true);
   assert.equal(appSource.includes('onDoubleClickCapture'), true);
   assert.equal(appSource.includes('preventDefault()'), true);
   assert.equal(appSource.includes('stopPropagation()'), true);
@@ -39,7 +39,7 @@ test('showing the main window keeps it at card size', () => {
   );
 
   assert.equal(sizeFile.width, 700);
-  assert.equal(sizeFile.height, 438);
+  assert.equal(sizeFile.height, 520);
   assert.equal(appSource.includes("import windowSize from './shared/windowSize.json';"), true);
   assert.equal(appSource.includes('width: windowSize.width,'), true);
   assert.equal(appSource.includes('height: windowSize.height,'), true);
@@ -90,4 +90,12 @@ test('autostart keeps the window hidden before initialization completes', () => 
   assert.equal(appSource.includes("invoke<boolean>('is_autostart_mode')"), true);
   assert.equal(appSource.includes('if (!autostartMode) {'), true);
   assert.equal(appSource.includes('await appWindow.show();'), true);
+});
+
+test('state refresh listener cleanup handles late async registration', () => {
+  const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
+  assert.equal(appSource.includes('let disposed = false;'), true);
+  assert.equal(appSource.includes('if (disposed) {'), true);
+  assert.equal(appSource.includes('disposed = true;'), true);
 });

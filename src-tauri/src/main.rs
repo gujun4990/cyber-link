@@ -762,7 +762,7 @@ mod tests {
             "pc_entity_id": "input_boolean.pc_05_online",
             "entity_id": {
                 "ac": "climate.office_ac",
-                "light": "light.office_light"
+                "switch": "switch.office_light"
             }
         }"#;
 
@@ -778,13 +778,13 @@ mod tests {
             config.entity_id,
             Some(DeviceIds {
                 ac: Some("climate.office_ac".to_string()),
-                light: Some("light.office_light".to_string()),
+                switch: Some("switch.office_light".to_string()),
             })
         );
     }
 
     #[test]
-    fn parses_config_when_ac_and_light_are_missing() {
+    fn parses_config_when_ac_and_switch_are_missing() {
         let json = r#"{
             "ha_url": "https://ha.example.local",
             "token": "secret",
@@ -799,7 +799,7 @@ mod tests {
         );
         assert_eq!(config.entity_id, None);
         assert_eq!(config.ac_entity_id(), None);
-        assert_eq!(config.light_entity_id(), None);
+        assert_eq!(config.switch_entity_id(), None);
     }
 
     #[test]
@@ -809,7 +809,7 @@ mod tests {
             "token": "secret",
             "entity_id": {
                 "ac": "climate.office_ac",
-                "light": "light.office_light"
+                "switch": "switch.office_light"
             }
         }"#;
 
@@ -828,7 +828,7 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         };
 
@@ -852,7 +852,7 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         };
 
@@ -869,50 +869,50 @@ mod tests {
     }
 
     #[test]
-    fn builds_light_turn_on_request_in_ha_client() {
+    fn builds_switch_turn_on_request_in_ha_client() {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         };
 
-        let request = crate::ha_client::light_turn_on_request(&config).expect("request");
+        let request = crate::ha_client::switch_turn_on_request(&config).expect("request");
 
         assert_eq!(
             request.url,
-            "https://ha.example.local/api/services/light/turn_on"
+            "https://ha.example.local/api/services/switch/turn_on"
         );
         assert_eq!(
             request.body,
-            serde_json::json!({"entity_id": "light.office_light"})
+            serde_json::json!({"entity_id": "switch.office_light"})
         );
     }
 
     #[test]
-    fn builds_light_turn_off_request_in_ha_client() {
+    fn builds_switch_turn_off_request_in_ha_client() {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
             token: "secret".into(),
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         };
 
-        let request = crate::ha_client::light_turn_off_request(&config).expect("request");
+        let request = crate::ha_client::switch_turn_off_request(&config).expect("request");
 
         assert_eq!(
             request.url,
-            "https://ha.example.local/api/services/light/turn_off"
+            "https://ha.example.local/api/services/switch/turn_off"
         );
         assert_eq!(
             request.body,
-            serde_json::json!({"entity_id": "light.office_light"})
+            serde_json::json!({"entity_id": "switch.office_light"})
         );
     }
 
@@ -980,7 +980,7 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         };
 
@@ -1586,13 +1586,13 @@ mod tests {
             Err::<(), anyhow::Error>(anyhow!("ha failed")),
             snapshot.clone(),
             |s| {
-                s.light_on = !s.light_on;
+                s.switch_on = !s.switch_on;
             },
         )
         .await;
 
         assert!(result.is_err());
-        assert!(snapshot.light_on);
+        assert!(snapshot.switch_on);
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 export const ACTIONS = {
   acToggle: 'ac_toggle',
   acSetTemp: 'ac_set_temp',
-  lightToggle: 'light_toggle',
+  switchToggle: 'switch_toggle',
   startup: 'startup_online',
   shutdown: 'shutdown_signal',
 } as const;

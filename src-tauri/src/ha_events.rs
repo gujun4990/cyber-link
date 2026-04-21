@@ -31,7 +31,7 @@ pub fn entity_id_from_state_changed_event(message: &Value) -> Option<&str> {
 
 pub fn should_refresh_snapshot(config: &AppConfig, entity_id: &str) -> bool {
     config.ac_entity_id() == Some(entity_id)
-        || config.light_entity_id() == Some(entity_id)
+        || config.switch_entity_id() == Some(entity_id)
         || config.pc_entity_id() == Some(entity_id)
 }
 
@@ -165,7 +165,7 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         }
     }
@@ -205,7 +205,7 @@ mod tests {
         let config = sample_config();
 
         assert!(should_refresh_snapshot(&config, "climate.office_ac"));
-        assert!(should_refresh_snapshot(&config, "light.office_light"));
+        assert!(should_refresh_snapshot(&config, "switch.office_light"));
         assert!(should_refresh_snapshot(&config, "input_boolean.pc_05_online"));
         assert!(!should_refresh_snapshot(&config, "climate.room2_ac"));
     }

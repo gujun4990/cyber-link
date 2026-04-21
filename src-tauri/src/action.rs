@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::models::{ACState, AppConfig, DeviceIds, DeviceSnapshot, LightState};
+    use crate::models::{ACState, AppConfig, DeviceIds, DeviceSnapshot, SwitchState};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -10,7 +10,7 @@ mod tests {
 
     use super::{apply_action, ActionArgs, ActionKind};
 
-    fn sample_snapshot(ac_on: bool, light_on: bool) -> DeviceSnapshot {
+    fn sample_snapshot(ac_on: bool, switch_on: bool) -> DeviceSnapshot {
         DeviceSnapshot {
             room: "核心-01".into(),
             pc_id: "终端-05".into(),
@@ -19,13 +19,13 @@ mod tests {
                 is_available: true,
                 temp: 16,
             },
-            light: LightState {
-                is_on: light_on,
+            switch: SwitchState {
+                is_on: switch_on,
                 is_available: true,
             },
-            light_on,
+            switch_on,
             ac_available: true,
-            light_available: true,
+            switch_available: true,
             connected: true,
         }
     }
@@ -81,7 +81,7 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: None,
+                switch: None,
             }),
         };
 
@@ -104,12 +104,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn light_toggle_confirms_refreshed_snapshot() {
+    async fn switch_toggle_confirms_refreshed_snapshot() {
         disable_proxy_env();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let addr = listener.local_addr().expect("listener addr");
-        let light_is_on = Arc::new(AtomicBool::new(false));
-        let light_is_on_for_server = Arc::clone(&light_is_on);
+        let switch_is_on = Arc::new(AtomicBool::new(false));
+        let switch_is_on_for_server = Arc::clone(&switch_is_on);
 
         let server = tokio::spawn(async move {
             let mut seen = 0usize;
@@ -125,10 +125,10 @@ mod tests {
                 match seen {
                     0 => {
                         respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-                        light_is_on_for_server.store(true, Ordering::SeqCst);
+                        switch_is_on_for_server.store(true, Ordering::SeqCst);
                     }
                     1 => {
-                        let body = if light_is_on_for_server.load(Ordering::SeqCst) {
+                        let body = if switch_is_on_for_server.load(Ordering::SeqCst) {
                             r#"{"state":"on","attributes":{}}"#
                         } else {
                             r#"{"state":"off","attributes":{}}"#
@@ -153,7 +153,7 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: None,
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         };
 
@@ -161,7 +161,7 @@ mod tests {
             &config,
             sample_snapshot(false, false),
             ActionArgs {
-                action: ActionKind::LightToggle,
+                action: ActionKind::SwitchToggle,
                 value: None,
             },
         )
@@ -171,7 +171,7 @@ mod tests {
         server.await.expect("server task");
 
         assert!(outcome.error.is_none());
-        assert!(outcome.snapshot.light_on);
+        assert!(outcome.snapshot.switch_on);
     }
 
     #[tokio::test]
@@ -205,7 +205,7 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: None,
+                switch: None,
             }),
         };
 
@@ -257,7 +257,7 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: None,
+                switch: None,
             }),
         };
 
@@ -297,7 +297,7 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                light: Some("light.office_light".into()),
+                switch: Some("switch.office_light".into()),
             }),
         };
 
@@ -315,10 +315,110 @@ mod tests {
         server.await.expect("server task");
 
         assert!(outcome.error.is_none());
+        assert!(outcome.snapshot.connected);
         assert!(outcome.snapshot.ac_available);
-        assert!(outcome.snapshot.light_available);
+        assert!(outcome.snapshot.ac.is_available);
+        assert!(outcome.snapshot.switch_available);
+        assert!(outcome.snapshot.switch.is_available);
         assert!(outcome.snapshot.ac.is_on);
-        assert!(outcome.snapshot.light_on);
+        assert!(outcome.snapshot.switch_on);
+        assert!(outcome.snapshot.switch.is_on);
+    }
+
+    #[tokio::test]
+    async fn startup_online_restores_connected_state_from_offline_snapshot() {
+        disable_proxy_env();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept ac request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+
+            let (socket, _) = listener.accept().await.expect("accept switch request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{}", addr),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                switch: Some("switch.office_light".into()),
+            }),
+        };
+
+        let mut snapshot = sample_snapshot(false, false);
+        snapshot.connected = false;
+
+        let outcome = apply_action(
+            &config,
+            snapshot,
+            ActionArgs {
+                action: ActionKind::StartupOnline,
+                value: None,
+            },
+        )
+        .await
+        .expect("startup online should succeed");
+
+        server.await.expect("server task");
+
+        assert!(outcome.snapshot.connected);
+    }
+
+    #[tokio::test]
+    async fn startup_online_does_not_fabricate_connection_without_targets() {
+        let config = AppConfig {
+            ha_url: "http://127.0.0.1:9".into(),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: None,
+                switch: None,
+            }),
+        };
+
+        let mut snapshot = sample_snapshot(false, false);
+        snapshot.connected = false;
+
+        let outcome = apply_action(
+            &config,
+            snapshot,
+            ActionArgs {
+                action: ActionKind::StartupOnline,
+                value: None,
+            },
+        )
+        .await
+        .expect("startup online should succeed");
+
+        assert!(!outcome.snapshot.connected);
+    }
+
+    #[test]
+    fn snapshot_helpers_keep_flat_and_nested_states_in_sync() {
+        let mut snapshot = sample_snapshot(false, false);
+
+        snapshot.sync_ac_state(true, true);
+        snapshot.sync_switch_state(true, false);
+
+        assert!(snapshot.ac_available);
+        assert!(snapshot.ac.is_available);
+        assert!(snapshot.ac.is_on);
+        assert!(snapshot.switch_available);
+        assert!(snapshot.switch.is_available);
+        assert!(!snapshot.switch_on);
+        assert!(!snapshot.switch.is_on);
+    }
+
+    #[test]
+    fn action_kind_accepts_switch_toggle_payload() {
+        let action: ActionKind = serde_json::from_str(r#""switch_toggle""#).expect("action");
+
+        assert_eq!(action, ActionKind::SwitchToggle);
     }
 }
 
@@ -329,7 +429,7 @@ use std::time::Duration;
 
 use crate::ha_client::{
     climate_set_temperature_request, climate_temperature_targets, climate_turn_off_request,
-    climate_turn_on_request, fetch_ha_entity_state, light_turn_off_request, light_turn_on_request,
+    climate_turn_on_request, fetch_ha_entity_state, switch_turn_off_request, switch_turn_on_request,
     send_ha_request, send_ha_request_with_timeout,
 };
 use crate::models::{AppConfig, DeviceSnapshot, HaRequest};
@@ -350,7 +450,7 @@ pub(crate) struct ActionApplyOutcome {
 #[derive(Debug, Clone)]
 enum HaAction {
     ToggleAc { on: bool },
-    ToggleLight { on: bool },
+    ToggleSwitch { on: bool },
 }
 
 impl HaAction {
@@ -363,11 +463,11 @@ impl HaAction {
                     climate_turn_off_request(config)
                 }
             }
-            Self::ToggleLight { on } => {
+            Self::ToggleSwitch { on } => {
                 if *on {
-                    light_turn_on_request(config)
+                    switch_turn_on_request(config)
                 } else {
-                    light_turn_off_request(config)
+                    switch_turn_off_request(config)
                 }
             }
         }
@@ -379,7 +479,7 @@ impl HaAction {
 pub(crate) enum ActionKind {
     AcToggle,
     AcSetTemp,
-    LightToggle,
+    SwitchToggle,
     StartupOnline,
     ShutdownSignal,
 }
@@ -468,13 +568,13 @@ fn startup_online_targets(config: &AppConfig) -> (bool, bool, bool) {
     (
         config.pc_entity_id().is_some(),
         config.ac_entity_id().is_some(),
-        config.light_entity_id().is_some(),
+        config.switch_entity_id().is_some(),
     )
 }
 
 pub(crate) async fn send_startup_online(config: &AppConfig) -> Result<()> {
     let mut first_err: Option<anyhow::Error> = None;
-    let (send_pc, send_ac, send_light) = startup_online_targets(config);
+    let (send_pc, send_ac, send_switch) = startup_online_targets(config);
 
     if send_pc {
         if let Err(err) = send_ha_notification(config, true).await {
@@ -488,8 +588,8 @@ pub(crate) async fn send_startup_online(config: &AppConfig) -> Result<()> {
         }
     }
 
-    if send_light {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleLight { on: true }).await {
+    if send_switch {
+        if let Err(err) = send_ha_action(config, HaAction::ToggleSwitch { on: true }).await {
             first_err.get_or_insert(err);
         }
     }
@@ -514,8 +614,8 @@ pub(crate) async fn send_shutdown_signal(config: &AppConfig) -> Result<()> {
         }
     }
 
-    if config.light_entity_id().is_some() {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleLight { on: false }).await {
+    if config.switch_entity_id().is_some() {
+        if let Err(err) = send_ha_action(config, HaAction::ToggleSwitch { on: false }).await {
             first_err.get_or_insert(err);
         }
     }
@@ -531,7 +631,7 @@ pub(crate) async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceS
         Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
         None => None,
     };
-    let light_state = match config.light_entity_id() {
+    let switch_state = match config.switch_entity_id() {
         Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
         None => None,
     };
@@ -543,7 +643,7 @@ pub(crate) async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceS
     Ok(snapshot_from_loaded_states(
         pc_state.as_ref(),
         ac_state.as_ref(),
-        light_state.as_ref(),
+        switch_state.as_ref(),
     ))
 }
 
@@ -625,26 +725,26 @@ async fn apply_action_with_delays(
             )
             .await);
         }
-        ActionKind::LightToggle => {
-            if config.light_entity_id().is_none() {
+        ActionKind::SwitchToggle => {
+            if config.switch_entity_id().is_none() {
                 return Ok(ActionApplyOutcome {
                     snapshot,
                     error: None,
                 });
             }
             let original = snapshot.clone();
-            let next = !snapshot.light_on;
+            let next = !snapshot.switch_on;
             let result = send_ha_request(
                 config,
-                HaAction::ToggleLight { on: next }.into_request(config)?,
+                HaAction::ToggleSwitch { on: next }.into_request(config)?,
             )
             .await;
-            snapshot.light_on = next;
+            snapshot.sync_switch_state(snapshot.switch_available, next);
             return Ok(confirm_action_snapshot_with_delays(
                 config,
                 &original,
                 result.err().map(|err| err.to_string()),
-                move |current| current.light_on == next,
+                move |current| current.switch_on == next,
                 initial_delay,
                 retry_count,
                 retry_interval,
@@ -654,20 +754,14 @@ async fn apply_action_with_delays(
         }
         ActionKind::StartupOnline => {
             send_startup_online(config).await?;
-            snapshot.ac_available = config.ac_entity_id().is_some();
-            snapshot.light_available = config.light_entity_id().is_some();
+            snapshot.connected = config.pc_entity_id().is_some()
+                || config.ac_entity_id().is_some()
+                || config.switch_entity_id().is_some();
+            let ac_available = config.ac_entity_id().is_some();
+            let switch_available = config.switch_entity_id().is_some();
 
-            if snapshot.ac_available {
-                snapshot.ac.is_on = true;
-            } else {
-                snapshot.ac.is_on = false;
-            }
-
-            if snapshot.light_available {
-                snapshot.light_on = true;
-            } else {
-                snapshot.light_on = false;
-            }
+            snapshot.sync_ac_state(ac_available, ac_available);
+            snapshot.sync_switch_state(switch_available, switch_available);
         }
         ActionKind::ShutdownSignal => {
             send_shutdown_signal(config).await?;

@@ -24,12 +24,12 @@ test('tauri config installs NSIS releases for the current user', () => {
 test('app source hides the native window from the title buttons', () => {
   const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 
-  assert.match(appSource, /const hideWindow = async \(\) =>/);
-  assert.match(appSource, /const minimizeWindow = async \(\) =>/);
+  assert.match(appSource, /const hideWindow = useCallback\(async \(\) => \{/);
+  assert.match(appSource, /const minimizeWindow = useCallback\(async \(\) => \{/);
   assert.match(appSource, /await appWindow\.hide\(\);/);
-  assert.match(appSource, /OFFLINE_MODE/);
-  assert.match(appSource, /ACTION_FAILED/);
-  assert.match(appSource, /REFRESH_FAILED/);
+  assert.match(appSource, /离线模式/);
+  assert.match(appSource, /操作失败/);
+  assert.match(appSource, /刷新失败/);
 });
 
 test('windows entrypoint restores the existing main window on relaunch', () => {

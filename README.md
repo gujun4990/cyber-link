@@ -20,7 +20,7 @@
 ## 项目功能
 
 - 默认隐藏到系统托盘
-- 通过 Home Assistant 控制空调和灯光（可选配置）
+- 通过 Home Assistant 控制空调和控制项（可选配置）
 - 通过 `input_boolean` 上报本机在线/离线状态
 - 拦截 Windows 关机消息并发送离线通知
 - 通过后端快照和 `state-refresh` 事件同步前端 UI
@@ -73,7 +73,7 @@
   "pc_entity_id": "input_boolean.your_pc_online",
   "entity_id": {
     "ac": "climate.your_ac_entity",
-    "light": "light.your_light_entity"
+    "switch": "switch.your_switch_entity"
   }
 }
 ```
@@ -82,17 +82,19 @@
 
 - `ha_url`：Home Assistant 基础地址
 - `token`：长期访问令牌
-- `pc_entity_id`：表示本机在线/离线的 `input_boolean`
+- `pc_entity_id`：表示本机在线/离线的 `input_boolean`，可省略
 - `entity_id.ac`：空调实体，可省略
-- `entity_id.light`：灯光实体，可省略
+- `entity_id.switch`：控制项实体，可省略，填入完整 entity_id 即可
 
-如果 `entity_id.ac` 或 `entity_id.light` 未配置，对应功能会在前端禁用，并且后端不会发送相关 Home Assistant 请求。
+如果 `pc_entity_id` 未配置，应用不会发送本机在线/离线通知。
+如果 `entity_id.ac` 或 `entity_id.switch` 未配置，对应功能会在前端禁用，并且后端不会发送相关 Home Assistant 请求。
+`entity_id` 会按前缀自动推断 Home Assistant 域名，因此可填写 `light.*`、`switch.*` 等实体。
 
 ### Home Assistant 实体示例
 
 - `input_boolean.your_pc_online`
 - `climate.office_ac`
-- `light.desk_light`
+- `switch.desk_switch`
 
 ## 使用步骤
 
@@ -101,7 +103,7 @@
 3. 填入 `ha_url`、`token` 和实体 ID
 4. 启动应用
 5. 确认托盘图标出现，UI 显示在线或离线状态
-6. 通过按钮控制空调和灯光
+6. 通过按钮控制空调和控制项
 
 ## 截图
 

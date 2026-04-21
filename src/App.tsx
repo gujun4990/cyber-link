@@ -41,9 +41,9 @@ interface DeviceState {
   room: string;
   pcId: string;
   ac: ACState;
-  lightOn: boolean;
+  switchOn: boolean;
   acAvailable: boolean;
-  lightAvailable: boolean;
+  switchAvailable: boolean;
   connected: boolean;
   initError?: string;
 }
@@ -243,9 +243,9 @@ export default function App() {
     room: '核心-01',
     pcId: '终端-05',
     ac: { isOn: true, temp: 16 },
-    lightOn: false,
+    switchOn: false,
     acAvailable: true,
-    lightAvailable: true,
+    switchAvailable: true,
     connected: true,
   });
 
@@ -314,10 +314,15 @@ export default function App() {
   }, [logMessage]);
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: null | (() => void) = null;
 
     void (async () => {
       const autostartMode = await invoke<boolean>('is_autostart_mode');
+
+      if (disposed) {
+        return;
+      }
 
       unlisten = await listen<DeviceState>('state-refresh', (event) => {
         if (!event.payload) return;
@@ -342,6 +347,12 @@ export default function App() {
         setHasLoadedState(true);
       });
 
+      if (disposed && unlisten) {
+        unlisten();
+        unlisten = null;
+        return;
+      }
+
       await appWindow.setSize(new LogicalSize(windowSize.width, windowSize.height));
       if (!autostartMode) {
         await appWindow.show();
@@ -364,6 +375,7 @@ export default function App() {
     })();
 
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
   }, [latestStateRef, reportError]);
@@ -402,10 +414,10 @@ export default function App() {
     [device.ac.isOn, device.ac.temp, device.acAvailable, hasLoadedState, syncingAction, syncDevice],
   );
 
-  const toggleLight = useCallback(() => {
-    if (!hasLoadedState || syncingAction || !device.lightAvailable) return;
-    void syncDevice(ACTIONS.lightToggle);
-  }, [device.lightAvailable, hasLoadedState, syncingAction, syncDevice]);
+  const toggleSwitch = useCallback(() => {
+    if (!hasLoadedState || syncingAction || !device.switchAvailable) return;
+    void syncDevice(ACTIONS.switchToggle);
+  }, [device.switchAvailable, hasLoadedState, syncingAction, syncDevice]);
 
   const refreshHaState = useCallback(async () => {
     if (refreshing) return;
@@ -464,7 +476,7 @@ export default function App() {
         : '系统稳定';
 
   const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
-  const lightDisplayOn = hasLoadedState && device.connected && device.lightOn;
+  const switchDisplayOn = hasLoadedState && device.connected && device.switchOn;
   const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;
   const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;
   const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
@@ -656,17 +668,17 @@ export default function App() {
                 />
 
                 <TechToggle
-                  active={lightDisplayOn}
-                  onClick={toggleLight}
-                  disabled={!hasLoadedState || syncingAction || !device.connected || !device.lightAvailable}
+                  active={switchDisplayOn}
+                  onClick={toggleSwitch}
+                  disabled={!hasLoadedState || syncingAction || !device.connected || !device.switchAvailable}
                   label="环境氛围照明"
-                  subLabel={lightDisplayOn ? '强光已开启' : '已关闭'}
+                  subLabel={switchDisplayOn ? '强光已开启' : '已关闭'}
                   icon={
                     <Lightbulb
                       size={24}
-                      className={lightDisplayOn ? 'text-yellow-100 opacity-100' : 'text-white/70'}
+                      className={switchDisplayOn ? 'text-yellow-100 opacity-100' : 'text-white/70'}
                       style={
-                        lightDisplayOn
+                        switchDisplayOn
                           ? {
                               filter: 'drop-shadow(0 0 10px rgba(255,240,180,0.9)) drop-shadow(0 0 18px rgba(255,220,120,0.7))',
                             }
