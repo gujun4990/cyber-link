@@ -51,7 +51,7 @@ fn climate_request(config: &AppConfig, service: &str) -> Result<HaRequest> {
 fn light_request(config: &AppConfig, service: &str) -> Result<HaRequest> {
     let entity_id = entity_id(config, false)?;
     Ok(HaRequest {
-        url: format!("{}/api/services/light/{}", base_url(config), service),
+        url: format!("{}/api/services/switch/{}", base_url(config), service),
         body: request_body(entity_id),
     })
 }

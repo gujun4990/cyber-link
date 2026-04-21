@@ -884,7 +884,7 @@ mod tests {
 
         assert_eq!(
             request.url,
-            "https://ha.example.local/api/services/light/turn_on"
+            "https://ha.example.local/api/services/switch/turn_on"
         );
         assert_eq!(
             request.body,
@@ -908,7 +908,7 @@ mod tests {
 
         assert_eq!(
             request.url,
-            "https://ha.example.local/api/services/light/turn_off"
+            "https://ha.example.local/api/services/switch/turn_off"
         );
         assert_eq!(
             request.body,
