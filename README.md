@@ -37,7 +37,9 @@
 1. 前端调用 `initialize_app`
 2. Rust 读取 `config.json`
 3. Rust 确保自启动注册表已写入
-4. Rust 发送上线通知和启动动作
+4. Rust 根据 `pc_entity_id` 分支处理：
+   - 已配置：只发送本机在线通知，设备联动交给 Home Assistant
+   - 未配置：继续执行设备启动动作
 5. Rust 写入 `SharedState`
 6. Rust 发送 `state-refresh`
 7. 前端根据推送快照更新 UI
@@ -89,9 +91,11 @@
 - `entity_id.ambient_light`：氛围灯实体，可省略，填入完整 entity_id 即可
 - `entity_id.main_light`：主照明实体，可省略，填入完整 entity_id 即可
 - `entity_id.door_sign_light`：门牌灯实体，可省略，填入完整 entity_id 即可
-- 如果要启用 Windows 真关机后的 30 秒延迟确认，请在 Home Assistant 中额外创建 `input_boolean.cyber_link_shutdown_pending` 和 `timer.cyber_link_shutdown_delay`，具体流程见 `docs/ha-shutdown-pending-automation.md`
 
-如果 `pc_entity_id` 未配置，应用不会发送本机在线/离线通知。
+前提：如果要启用房间级的“最后一台电脑离线后延迟 30 秒关闭空调和灯”，每台电脑都需要配置 `pc_entity_id`，然后在 Home Assistant 中为每个房间单独配置聚合传感器和自动化，具体流程见 `docs/ha-room-shutdown-delay.md`
+
+如果 `pc_entity_id` 已配置，启动时只发送本机在线通知，关机时只发送本机离线通知，设备开关交给 Home Assistant 的房间级自动化。
+如果 `pc_entity_id` 未配置，应用不会发送本机在线/离线通知，并继续使用当前的设备直控退化逻辑。
 如果 `entity_id.ac`、`entity_id.ambient_light`、`entity_id.main_light` 或 `entity_id.door_sign_light` 未配置，对应功能会在前端禁用，并且后端不会发送相关 Home Assistant 请求。
 `entity_id` 会按前缀自动推断 Home Assistant 域名，因此可填写 `light.*`、`switch.*` 等实体。
 

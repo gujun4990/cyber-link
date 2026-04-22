@@ -1,3 +1,156 @@
+use std::future::Future;
+
+use anyhow::Result as AnyResult;
+use crate::{retry_startup_task, StartupMode};
+
+pub(crate) async fn bootstrap_startup_snapshot<T, Enable, EnableFut, Startup, StartupFut, Verify, VerifyFut, Fetch, FetchFut>(
+    startup_mode: StartupMode,
+    mut enable_autostart: Enable,
+    mut send_startup_online: Startup,
+    mut verify_autostart: Verify,
+    mut fetch_snapshot: Fetch,
+) -> AnyResult<T>
+where
+    Enable: FnMut() -> EnableFut,
+    EnableFut: Future<Output = AnyResult<()>>,
+    Startup: FnMut() -> StartupFut,
+    StartupFut: Future<Output = AnyResult<()>>,
+    Verify: FnMut() -> VerifyFut,
+    VerifyFut: Future<Output = AnyResult<()>>,
+    Fetch: FnMut() -> FetchFut,
+    FetchFut: Future<Output = AnyResult<T>>,
+{
+    if matches!(startup_mode, StartupMode::Autostart) {
+        retry_startup_task(3, move || enable_autostart()).await?;
+        retry_startup_task(3, move || send_startup_online()).await?;
+        retry_startup_task(3, move || verify_autostart()).await?;
+    }
+
+    retry_startup_task(3, move || fetch_snapshot()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bootstrap_startup_snapshot;
+    use crate::StartupMode;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn autostart_setup_runs_once_when_snapshot_retry_retries() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let enable_calls = Arc::clone(&calls);
+        let startup_calls = Arc::clone(&calls);
+        let verify_calls = Arc::clone(&calls);
+        let fetch_calls = Arc::clone(&calls);
+        let enable_attempts = Arc::new(Mutex::new(0usize));
+        let enable_attempts_for_call = Arc::clone(&enable_attempts);
+        let verify_attempts = Arc::new(Mutex::new(0usize));
+        let verify_attempts_for_call = Arc::clone(&verify_attempts);
+        let fetch_attempts = Arc::new(Mutex::new(0usize));
+        let fetch_attempts_for_call = Arc::clone(&fetch_attempts);
+
+        let result = bootstrap_startup_snapshot(
+            StartupMode::Autostart,
+            move || {
+                let enable_attempts = Arc::clone(&enable_attempts_for_call);
+                let enable_calls = Arc::clone(&enable_calls);
+                async move {
+                    let mut attempts = enable_attempts.lock().unwrap();
+                    *attempts += 1;
+                    enable_calls.lock().unwrap().push("enable");
+                    if *attempts < 3 {
+                        Err::<(), anyhow::Error>(anyhow::anyhow!("enable failed"))
+                    } else {
+                        Ok::<(), anyhow::Error>(())
+                    }
+                }
+            },
+            move || {
+                startup_calls.lock().unwrap().push("startup");
+                async { Ok::<(), anyhow::Error>(()) }
+            },
+            move || {
+                let verify_attempts = Arc::clone(&verify_attempts_for_call);
+                let verify_calls = Arc::clone(&verify_calls);
+                async move {
+                    let mut attempts = verify_attempts.lock().unwrap();
+                    *attempts += 1;
+                    verify_calls.lock().unwrap().push("verify");
+                    if *attempts < 3 {
+                        Err::<(), anyhow::Error>(anyhow::anyhow!("verify failed"))
+                    } else {
+                        Ok::<(), anyhow::Error>(())
+                    }
+                }
+            },
+            move || {
+                let fetch_attempts = Arc::clone(&fetch_attempts_for_call);
+                let fetch_calls = Arc::clone(&fetch_calls);
+                async move {
+                    let mut attempts = fetch_attempts.lock().unwrap();
+                    *attempts += 1;
+                    fetch_calls.lock().unwrap().push("fetch");
+                    if *attempts < 3 {
+                        Err::<String, anyhow::Error>(anyhow::anyhow!("fetch failed"))
+                    } else {
+                        Ok::<String, anyhow::Error>("snapshot".into())
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "snapshot");
+        assert_eq!(calls.lock().unwrap().as_slice(), ["enable", "enable", "enable", "startup", "verify", "verify", "verify", "fetch", "fetch", "fetch"]);
+    }
+
+    #[tokio::test]
+    async fn autostart_startup_action_retries_without_repeating_setup() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let enable_calls = Arc::clone(&calls);
+        let startup_calls = Arc::clone(&calls);
+        let verify_calls = Arc::clone(&calls);
+        let fetch_calls = Arc::clone(&calls);
+        let startup_attempts = Arc::new(Mutex::new(0usize));
+        let startup_attempts_for_call = Arc::clone(&startup_attempts);
+
+        let result = bootstrap_startup_snapshot(
+            StartupMode::Autostart,
+            move || {
+                enable_calls.lock().unwrap().push("enable");
+                async { Ok::<(), anyhow::Error>(()) }
+            },
+            move || {
+                let startup_attempts = Arc::clone(&startup_attempts_for_call);
+                let startup_calls = Arc::clone(&startup_calls);
+                async move {
+                    let mut attempts = startup_attempts.lock().unwrap();
+                    *attempts += 1;
+                    startup_calls.lock().unwrap().push("startup");
+                    if *attempts < 3 {
+                        Err::<(), anyhow::Error>(anyhow::anyhow!("startup failed"))
+                    } else {
+                        Ok::<(), anyhow::Error>(())
+                    }
+                }
+            },
+            move || {
+                verify_calls.lock().unwrap().push("verify");
+                async { Ok::<(), anyhow::Error>(()) }
+            },
+            move || {
+                fetch_calls.lock().unwrap().push("fetch");
+                async { Ok::<String, anyhow::Error>("snapshot".into()) }
+            },
+        )
+        .await;
+
+        assert_eq!(result.expect("startup bootstrap should succeed"), "snapshot");
+        assert_eq!(calls.lock().unwrap().as_slice(), ["enable", "startup", "startup", "startup", "verify", "fetch"]);
+    }
+}
+
 pub const INVOKE_HANDLER_COMMAND_NAMES: [&str; 6] = [
     "is_autostart_mode",
     "initialize_app",
@@ -11,19 +164,16 @@ pub const INVOKE_HANDLER_COMMAND_NAMES: [&str; 6] = [
 use anyhow::anyhow;
 #[cfg(windows)]
 use tauri::{AppHandle, Manager, State};
-
 #[cfg(windows)]
 use crate::{
     action::{self, ActionArgs, ActionKind, ActionTarget},
     append_log_line, ensure_user_app_dir, load_config, log_line, refresh_snapshot_with_retry,
-    retry_startup_task, startup_mode_from_args, tolerate_autostart_error, SharedState, StartupMode,
+    startup_mode_from_args, tolerate_autostart_error, SharedState,
 };
 #[cfg(windows)]
 use crate::ha_events::spawn_state_listener_once;
-
 #[cfg(windows)]
 use crate::{models::DeviceSnapshot, snapshot::offline_snapshot};
-
 #[cfg(windows)]
 use winreg::{enums::*, RegKey};
 
@@ -114,32 +264,41 @@ pub async fn initialize_app(
     let app_for_task = app.clone();
     let config_for_task = config.clone();
     tauri::async_runtime::spawn(async move {
-        let result = retry_startup_task(3, || {
-            let config = config_for_task.clone();
-            async move {
-                if matches!(startup_mode, StartupMode::Autostart) {
-                    if let Err(err) = write_autostart_registry_entry(true) {
-                        if tolerate_autostart_error(&err) {
-                            log_line("WARN", format!("autostart enable skipped: {err}"));
-                        } else {
-                            return Err(anyhow!(err));
-                        }
+        let result = bootstrap_startup_snapshot(
+            startup_mode,
+            || async {
+                if let Err(err) = write_autostart_registry_entry(true) {
+                    if tolerate_autostart_error(&err) {
+                        log_line("WARN", format!("autostart enable skipped: {err}"));
+                        Ok(())
+                    } else {
+                        Err(anyhow!(err))
                     }
-
-                    action::send_startup_online(&config).await?;
-
-                    if let Err(err) = verify_autostart_registry_entry() {
-                        if tolerate_autostart_error(&err) {
-                            log_line("WARN", format!("autostart verification skipped: {err}"));
-                        } else {
-                            return Err(anyhow!(err));
-                        }
-                    }
+                } else {
+                    Ok(())
                 }
-
-                action::fetch_current_snapshot(&config).await
-            }
-        })
+            },
+            || {
+                let config = config_for_task.clone();
+                async move { action::send_startup_online(&config).await }
+            },
+            || async {
+                if let Err(err) = verify_autostart_registry_entry() {
+                    if tolerate_autostart_error(&err) {
+                        log_line("WARN", format!("autostart verification skipped: {err}"));
+                        Ok(())
+                    } else {
+                        Err(anyhow!(err))
+                    }
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                let config = config_for_task.clone();
+                async move { action::fetch_current_snapshot(&config).await }
+            },
+        )
         .await;
 
         let snapshot = match result {

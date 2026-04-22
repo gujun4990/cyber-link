@@ -8,10 +8,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::{
-        apply_action, send_shutdown_pending, send_startup_online, ActionArgs, ActionKind,
-        ActionTarget,
-    };
+    use super::{apply_action, send_startup_online, ActionArgs, ActionKind, ActionTarget};
 
     fn sample_snapshot(ac_on: bool, switch_on: bool) -> DeviceSnapshot {
         DeviceSnapshot {
@@ -55,20 +52,6 @@ mod tests {
         std::env::set_var("https_proxy", "");
     }
 
-    async fn respond_with_json(mut socket: tokio::net::TcpStream, body: &'static str) {
-        let mut buf = vec![0u8; 4096];
-        let _ = socket.read(&mut buf).await.expect("read request");
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("write response");
-    }
-
     async fn respond_with_request_assertion(
         mut socket: tokio::net::TcpStream,
         expected_substring: &'static str,
@@ -81,6 +64,20 @@ mod tests {
             request.contains(expected_substring),
             "request did not contain expected substring {expected_substring:?}: {request}"
         );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
+    async fn respond_with_json(mut socket: tokio::net::TcpStream, body: &'static str) {
+        let mut buf = vec![0u8; 4096];
+        let _ = socket.read(&mut buf).await.expect("read request");
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
@@ -215,80 +212,6 @@ mod tests {
 
         assert!(outcome.error.is_none());
         assert!(outcome.snapshot.switch_on);
-    }
-
-    #[tokio::test]
-    async fn shutdown_pending_turns_on_pending_helper() {
-        disable_proxy_env();
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("listener addr");
-
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.expect("accept pending request");
-            respond_with_request_assertion(
-                socket,
-                r#"/api/services/input_boolean/turn_on"#,
-                r#"{"state":"ok","attributes":{}}"#,
-            )
-            .await;
-        });
-
-        let config = AppConfig {
-            ha_url: format!("http://{addr}"),
-            token: "secret".into(),
-            pc_entity_id: None,
-            entity_id: Some(DeviceIds {
-                ac: None,
-                ambient_light: None,
-                ..Default::default()
-            }),
-        };
-
-        let result = send_shutdown_pending(&config).await;
-
-        server.await.expect("server task");
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn startup_online_clears_shutdown_pending_helper() {
-        disable_proxy_env();
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("listener addr");
-
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.expect("accept pending clear");
-            respond_with_request_assertion(
-                socket,
-                r#"/api/services/input_boolean/turn_off"#,
-                r#"{"state":"ok","attributes":{}}"#,
-            )
-            .await;
-
-            for _ in 0..2 {
-                let (socket, _) = listener.accept().await.expect("accept startup request");
-                respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-            }
-        });
-
-        let config = AppConfig {
-            ha_url: format!("http://{addr}"),
-            token: "secret".into(),
-            pc_entity_id: Some("input_boolean.pc_05_online".into()),
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                ambient_light: None,
-                main_light: None,
-                door_sign_light: None,
-            }),
-        };
-
-        let outcome = send_startup_online(&config).await;
-
-        server.await.expect("server task");
-
-        assert!(outcome.is_ok());
     }
 
     #[tokio::test]
@@ -460,16 +383,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_online_keeps_device_availability_and_turn_on_behavior() {
+    async fn startup_with_pc_entity_sends_only_pc_online() {
         disable_proxy_env();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let addr = listener.local_addr().expect("listener addr");
 
         let server = tokio::spawn(async move {
-            for _ in 0..4 {
-                let (socket, _) = listener.accept().await.expect("accept request");
-                respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-            }
+            let (socket, _) = listener.accept().await.expect("accept pc request");
+            respond_with_request_assertion(
+                socket,
+                "/api/services/input_boolean/turn_on",
+                r#"{"state":"ok","attributes":{}}"#,
+            )
+            .await;
         });
 
         let config = AppConfig {
@@ -483,9 +409,49 @@ mod tests {
             }),
         };
 
+        let outcome = send_startup_online(&config).await;
+
+        server.await.expect("server task");
+
+        assert!(outcome.is_ok());
+    }
+
+    #[tokio::test]
+    async fn startup_with_pc_entity_only_marks_connected() {
+        disable_proxy_env();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept pc request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
+            }),
+        };
+
+        let mut snapshot = sample_snapshot(false, false);
+        snapshot.connected = false;
+        snapshot.ac_available = false;
+        snapshot.switch_available = false;
+        snapshot.ac.is_available = false;
+        snapshot.switch.is_available = false;
+        snapshot.ac.is_on = false;
+        snapshot.switch_on = false;
+        snapshot.switch.is_on = false;
+
         let outcome = apply_action(
             &config,
-            sample_snapshot(false, false),
+            snapshot,
             ActionArgs {
                 action: ActionKind::StartupOnline,
                 target: None,
@@ -498,6 +464,59 @@ mod tests {
         server.await.expect("server task");
 
         assert!(outcome.error.is_none());
+        assert!(outcome.snapshot.connected);
+        assert!(!outcome.snapshot.ac_available);
+        assert!(!outcome.snapshot.switch_available);
+        assert!(!outcome.snapshot.ac.is_available);
+        assert!(!outcome.snapshot.switch.is_available);
+        assert!(!outcome.snapshot.ac.is_on);
+        assert!(!outcome.snapshot.switch_on);
+        assert!(!outcome.snapshot.switch.is_on);
+    }
+
+    #[tokio::test]
+    async fn startup_without_pc_entity_keeps_device_sync() {
+        disable_proxy_env();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept ac request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+
+            let (socket, _) = listener.accept().await.expect("accept switch request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
+            }),
+        };
+
+        let mut snapshot = sample_snapshot(false, false);
+        snapshot.connected = false;
+
+        let outcome = apply_action(
+            &config,
+            snapshot,
+            ActionArgs {
+                action: ActionKind::StartupOnline,
+                target: None,
+                value: None,
+            },
+        )
+        .await
+        .expect("startup online should succeed");
+
+        server.await.expect("server task");
+
         assert!(outcome.snapshot.connected);
         assert!(outcome.snapshot.ac_available);
         assert!(outcome.snapshot.ac.is_available);
@@ -517,9 +536,6 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept ac request");
-            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-
-            let (socket, _) = listener.accept().await.expect("accept pending clear");
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
 
             let (socket, _) = listener.accept().await.expect("accept switch request");
@@ -586,6 +602,64 @@ mod tests {
         .expect("startup online should succeed");
 
         assert!(!outcome.snapshot.connected);
+    }
+
+    #[tokio::test]
+    async fn startup_online_with_pc_entity_keeps_device_states_offline() {
+        disable_proxy_env();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept pc request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
+            }),
+        };
+
+        let mut snapshot = sample_snapshot(false, false);
+        snapshot.connected = false;
+        snapshot.ac_available = false;
+        snapshot.switch_available = false;
+        snapshot.ac.is_available = false;
+        snapshot.switch.is_available = false;
+        snapshot.ac.is_on = false;
+        snapshot.switch_on = false;
+        snapshot.switch.is_on = false;
+
+        let outcome = apply_action(
+            &config,
+            snapshot,
+            ActionArgs {
+                action: ActionKind::StartupOnline,
+                target: None,
+                value: None,
+            },
+        )
+        .await
+        .expect("startup online should succeed");
+
+        server.await.expect("server task");
+
+        assert!(outcome.error.is_none());
+        assert!(outcome.snapshot.connected);
+        assert!(!outcome.snapshot.ac_available);
+        assert!(!outcome.snapshot.switch_available);
+        assert!(!outcome.snapshot.ac.is_available);
+        assert!(!outcome.snapshot.switch.is_available);
+        assert!(!outcome.snapshot.ac.is_on);
+        assert!(!outcome.snapshot.switch_on);
+        assert!(!outcome.snapshot.switch.is_on);
     }
 
     #[test]
@@ -775,12 +849,6 @@ where
     }
 }
 
-const SHUTDOWN_PENDING_ENTITY_ID: &str = "input_boolean.cyber_link_shutdown_pending";
-
-pub(crate) async fn send_shutdown_pending(config: &AppConfig) -> Result<()> {
-    send_entity_toggle_request(config, SHUTDOWN_PENDING_ENTITY_ID, true).await
-}
-
 async fn send_ha_action(config: &AppConfig, action: HaAction) -> Result<()> {
     send_ha_request(config, action.into_request(config)?).await
 }
@@ -809,40 +877,49 @@ async fn send_ha_notification(config: &AppConfig, state: bool) -> Result<()> {
     send_ha_request_with_timeout(config, request, notification_timeout(state)).await
 }
 
-fn startup_online_targets(config: &AppConfig) -> (bool, bool, bool, bool, bool) {
-    (
-        config.pc_entity_id().is_some(),
-        config.ac_entity_id().is_some(),
-        config.ambient_light_entity_id().is_some(),
-        config.main_light_entity_id().is_some(),
-        config.door_sign_light_entity_id().is_some(),
-    )
+fn apply_startup_snapshot(snapshot: &mut DeviceSnapshot, config: &AppConfig) {
+    if config.pc_entity_id().is_some() {
+        snapshot.connected = true;
+        return;
+    }
+
+    snapshot.light_count = config.light_count();
+    snapshot.connected = config.ac_entity_id().is_some()
+        || config.ambient_light_entity_id().is_some()
+        || config.main_light_entity_id().is_some()
+        || config.door_sign_light_entity_id().is_some();
+
+    let ac_available = config.ac_entity_id().is_some();
+    let ambient_light_available = config.ambient_light_entity_id().is_some();
+    let main_light_available = config.main_light_entity_id().is_some();
+    let door_sign_light_available = config.door_sign_light_entity_id().is_some();
+
+    snapshot.sync_ac_state(ac_available, ac_available);
+    snapshot.sync_ambient_light_state(ambient_light_available, ambient_light_available);
+    snapshot.sync_main_light_state(main_light_available, main_light_available);
+    snapshot.sync_door_sign_light_state(
+        door_sign_light_available,
+        door_sign_light_available,
+    );
 }
 
 pub(crate) async fn send_startup_online(config: &AppConfig) -> Result<()> {
+    if config.pc_entity_id().is_some() {
+        send_ha_notification(config, true).await?;
+        return Ok(());
+    }
+
     let mut first_err: Option<anyhow::Error> = None;
-    let (send_pc, send_ac, send_ambient_light, send_main_light, send_door_sign_light) =
-        startup_online_targets(config);
-
-    if send_pc || send_ac || send_ambient_light || send_main_light || send_door_sign_light {
-        if let Err(err) = send_entity_toggle_request(config, SHUTDOWN_PENDING_ENTITY_ID, false).await {
-            first_err = Some(err);
-        }
-    }
-
-    if send_pc {
-        if let Err(err) = send_ha_notification(config, true).await {
-            first_err = Some(err);
-        }
-    }
-
-    if send_ac {
+    if config.ac_entity_id().is_some() {
         if let Err(err) = send_ha_action(config, HaAction::ToggleAc { on: true }).await {
             first_err.get_or_insert(err);
         }
     }
 
-    if send_ambient_light || send_main_light || send_door_sign_light {
+    if config.ambient_light_entity_id().is_some()
+        || config.main_light_entity_id().is_some()
+        || config.door_sign_light_entity_id().is_some()
+    {
         for entity_id in configured_light_entity_ids(config).into_iter().flatten() {
             if let Err(err) = send_entity_toggle_request(config, entity_id, true).await {
                 first_err.get_or_insert(err);
@@ -1032,24 +1109,7 @@ async fn apply_action_with_delays(
         }
         ActionKind::StartupOnline => {
             send_startup_online(config).await?;
-            snapshot.light_count = config.light_count();
-            snapshot.connected = config.pc_entity_id().is_some()
-                || config.ac_entity_id().is_some()
-                || config.ambient_light_entity_id().is_some()
-                || config.main_light_entity_id().is_some()
-                || config.door_sign_light_entity_id().is_some();
-            let ac_available = config.ac_entity_id().is_some();
-            let ambient_light_available = config.ambient_light_entity_id().is_some();
-            let main_light_available = config.main_light_entity_id().is_some();
-            let door_sign_light_available = config.door_sign_light_entity_id().is_some();
-
-            snapshot.sync_ac_state(ac_available, ac_available);
-            snapshot.sync_ambient_light_state(ambient_light_available, ambient_light_available);
-            snapshot.sync_main_light_state(main_light_available, main_light_available);
-            snapshot.sync_door_sign_light_state(
-                door_sign_light_available,
-                door_sign_light_available,
-            );
+            apply_startup_snapshot(&mut snapshot, config);
         }
         ActionKind::ShutdownSignal => {
             send_shutdown_signal(config).await?;

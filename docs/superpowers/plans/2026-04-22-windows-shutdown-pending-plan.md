@@ -1,5 +1,7 @@
 # Windows Shutdown Pending Implementation Plan
 
+> Superseded by `docs/superpowers/specs/2026-04-22-pc-entity-gated-startup-shutdown-design.md` and `docs/superpowers/specs/2026-04-22-multi-room-ha-shutdown-logic-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** When Windows is actually shutting down, the app should send a shutdown intent immediately and Home Assistant should wait 30 seconds before applying the final offline/shutdown action.
@@ -149,7 +151,7 @@ git commit -m "feat: send shutdown pending on windows close"
 ### Task 3: Document the HA timer helper flow
 
 **Files:**
-- Add: `docs/ha-shutdown-pending-automation.md`
+- Add: `docs/ha-room-shutdown-delay.md`
 - Modify: `README.md`
 
 - [ ] **Step 1: Write the documentation**
@@ -179,7 +181,7 @@ Add a short pointer in the setup section so users know the shutdown-pending help
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/ha-shutdown-pending-automation.md README.md
+git add docs/ha-room-shutdown-delay.md README.md
 git commit -m "docs: add shutdown pending ha setup"
 ```
 

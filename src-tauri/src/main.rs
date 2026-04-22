@@ -272,6 +272,13 @@ fn shutdown_notification_response(send: impl FnOnce()) -> isize {
     query_end_session_result_value()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+fn should_send_shutdown_signal(lparam: isize) -> bool {
+    const ENDSESSION_LOGOFF_MASK: u64 = 0x8000_0000;
+
+    ((lparam as u64) & ENDSESSION_LOGOFF_MASK) == 0
+}
+
 fn handle_windows_message_kind(msg: u32) -> bool {
     msg == WM_QUERYENDSESSION_MESSAGE
 }
@@ -496,12 +503,14 @@ mod windows_app {
         lparam: LPARAM,
     ) -> LRESULT {
         if handle_windows_message_kind(msg) {
-            if let Ok(config) = load_config() {
-                return shutdown_notification_response(|| {
-                    let _ = tauri::async_runtime::block_on(
-                        crate::action::send_shutdown_pending(&config),
-                    );
-                }) as LRESULT;
+            if should_send_shutdown_signal(lparam) {
+                if let Ok(config) = load_config() {
+                    return shutdown_notification_response(|| {
+                        let _ = tauri::async_runtime::block_on(
+                            crate::action::send_shutdown_signal(&config),
+                        );
+                    }) as LRESULT;
+                }
             }
             return query_end_session_result();
         }
@@ -588,6 +597,13 @@ mod windows_app {
 
             assert_eq!(result, Some(1));
         }
+
+        #[test]
+        fn shutdown_notification_should_not_trigger_for_logoff() {
+            use windows_sys::Win32::UI::WindowsAndMessaging::ENDSESSION_LOGOFF;
+
+            assert!(!should_send_shutdown_signal(ENDSESSION_LOGOFF as LPARAM));
+        }
     }
 
     pub fn run() {
@@ -653,9 +669,9 @@ mod tests {
         resolve_user_app_dir_from_base_dir, resolve_user_config_path_from_base_dir,
         resolve_user_log_path_from_base_dir, retry_startup_task, run_best_effort_three,
         run_serialized_tray_action, set_window_long_ptr_result, shutdown_notification_response,
-        startup_mode_from_args, startup_window_action, tolerate_autostart_error,
-        try_restore_existing_window, AppConfig, DeviceIds, DeviceSnapshot, StartupMode,
-        StartupWindowAction,
+        should_send_shutdown_signal, startup_mode_from_args, startup_window_action,
+        tolerate_autostart_error, try_restore_existing_window, AppConfig, DeviceIds,
+        DeviceSnapshot, StartupMode, StartupWindowAction,
     };
     use anyhow::anyhow;
     use std::io::Cursor;
@@ -1483,6 +1499,12 @@ mod tests {
     #[test]
     fn shared_shutdown_message_helper_preserves_raw_hwnd_value() {
         assert_eq!(hwnd_store_key_from_raw(0x1234usize), 0x1234isize);
+    }
+
+    #[test]
+    fn shared_shutdown_message_helper_ignores_logoff_sessions() {
+        assert!(should_send_shutdown_signal(0));
+        assert!(!should_send_shutdown_signal(0x8000_0000u64 as isize));
     }
 
     #[test]

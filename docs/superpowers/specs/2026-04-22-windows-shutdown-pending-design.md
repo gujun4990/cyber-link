@@ -1,5 +1,7 @@
 # Windows Shutdown Pending Design
 
+> Superseded by `docs/superpowers/specs/2026-04-22-pc-entity-gated-startup-shutdown-design.md` and `docs/superpowers/specs/2026-04-22-multi-room-ha-shutdown-logic-design.md`.
+
 **Goal:** When Windows is actually shutting down, the app should send a shutdown intent immediately, and Home Assistant should wait 30 seconds before applying the final offline/shutdown action.
 
 **Architecture:** Keep the current Tauri desktop app as the source of truth for shutdown intent, but move the 30-second delay and cancel logic into Home Assistant. The app emits a lightweight `shutdown_pending` signal during `WM_QUERYENDSESSION`; HA starts a timer, cancels it if `startup_online` arrives again, and only performs the final shutdown sync if the timer expires while the machine is still offline.

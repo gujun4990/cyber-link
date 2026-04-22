@@ -86,6 +86,31 @@ test('mock runtime applies temperature updates', async () => {
   assert.equal(afterTemp.ac.isOn, true);
 });
 
+test('mock runtime startup and shutdown mirror direct-control fallback', async () => {
+  const runtime = createAppRuntime({ mode: 'mock' });
+
+  await runtime.initializeApp();
+  const live = await runtime.refreshHaState();
+
+  const afterStartup = await runtime.handleHaAction('startup_online');
+  assert.equal(afterStartup.connected, true);
+  assert.equal(afterStartup.ac.isOn, true);
+  assert.equal(afterStartup.switchOn, true);
+  assert.equal(afterStartup.mainLightOn, true);
+  assert.equal(afterStartup.doorSignLightOn, true);
+
+  const afterShutdown = await runtime.handleHaAction('shutdown_signal');
+  assert.equal(afterShutdown.connected, true);
+  assert.equal(afterShutdown.ac.isOn, false);
+  assert.equal(afterShutdown.switchOn, false);
+  assert.equal(afterShutdown.mainLightOn, false);
+  assert.equal(afterShutdown.doorSignLightOn, false);
+  assert.equal(afterShutdown.acAvailable, live.acAvailable);
+  assert.equal(afterShutdown.switchAvailable, live.switchAvailable);
+  assert.equal(afterShutdown.mainLightAvailable, live.mainLightAvailable);
+  assert.equal(afterShutdown.doorSignLightAvailable, live.doorSignLightAvailable);
+});
+
 test('mock runtime keeps shutdown snapshots unchanged', async () => {
   const runtime = createAppRuntime({ mode: 'mock' });
   const initial = await runtime.initializeApp();
@@ -102,7 +127,15 @@ test('mock runtime keeps shutdown snapshots unchanged', async () => {
     mainLightAvailable: false,
     doorSignLightAvailable: false,
   });
-  assert.deepEqual(afterShutdown, live);
+  assert.equal(afterShutdown.connected, true);
+  assert.equal(afterShutdown.ac.isOn, false);
+  assert.equal(afterShutdown.switchOn, false);
+  assert.equal(afterShutdown.mainLightOn, false);
+  assert.equal(afterShutdown.doorSignLightOn, false);
+  assert.equal(afterShutdown.acAvailable, live.acAvailable);
+  assert.equal(afterShutdown.switchAvailable, live.switchAvailable);
+  assert.equal(afterShutdown.mainLightAvailable, live.mainLightAvailable);
+  assert.equal(afterShutdown.doorSignLightAvailable, live.doorSignLightAvailable);
 });
 
 test('mock runtime exposes ambient light aliases', async () => {

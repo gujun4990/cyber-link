@@ -566,7 +566,7 @@ export default function App() {
       className="fixed inset-0 m-auto border-[1.5px] border-white/18 overflow-hidden flex flex-col shadow-[0_18px_48px_rgba(0,0,0,0.5),0_0_16px_rgba(6,182,212,0.14)] antialiased"
       style={appShellStyle}
     >
-      <div className="absolute inset-0 rounded-xl border border-white/8 pointer-events-none z-50" />
+      <div className="absolute inset-0 border border-white/8 pointer-events-none z-50" />
       <div className="absolute inset-0 bg-carbon mix-blend-soft-light opacity-5 pointer-events-none" />
 
       <div
@@ -719,7 +719,7 @@ export default function App() {
                     <Fan
                       className={acDisplayOn ? 'opacity-80' : ''}
                       size={24}
-                      style={acDisplayOn ? { animation: 'spin 5s linear infinite' } : undefined}
+                      style={acDisplayOn ? { animation: 'spin 120s linear infinite' } : undefined}
                     />
                   }
                 />

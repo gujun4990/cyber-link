@@ -133,16 +133,16 @@ function applyMockAction(
       return next;
     case 'startup_online':
       next.connected = true;
-      next.acAvailable = true;
-      next.switchAvailable = true;
-      next.mainLightAvailable = true;
-      next.doorSignLightAvailable = true;
       next.ac.isOn = true;
       next.switchOn = true;
       next.mainLightOn = true;
       next.doorSignLightOn = true;
       return next;
     case 'shutdown_signal':
+      next.ac.isOn = false;
+      next.switchOn = false;
+      next.mainLightOn = false;
+      next.doorSignLightOn = false;
       return next;
   }
 }

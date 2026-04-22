@@ -2,391 +2,185 @@
 
 ## 目的
 
-不要在 Windows 客户端判断“是不是最后一台电脑”。
-客户端彼此之间很难实时同步状态，容易出现误判。
-
-正确做法是把这个判断交给 Home Assistant 统一处理：
+不要在 Windows 客户端里判断“是不是最后一台电脑”。这个判断应该交给 Home Assistant 统一处理，并且按房间隔离：
 
 - 每台电脑只负责上报自己的在线/离线状态
-- Home Assistant 汇总同一房间所有电脑的状态
-- 由 Home Assistant 判断什么时候该打开或关闭空调、灯光
+- 同房间多台电脑由 HA 聚合成一个房间级在线状态
+- 房间里任意一台电脑上线时，立即打开这个房间的空调和灯
+- 房间里最后一台电脑离线并持续 30 秒时，再关闭这个房间的空调和灯
 
-## 核心思路
+## 当前数据模型
 
-### 1. 每台电脑一个 `input_boolean`
+### `config.json` 仍然是电脑级
 
-每台 Windows 客户端在 Home Assistant 中对应一个虚拟开关：
+每台电脑仍然使用自己的 `config.json`，可选字段保持不变：
 
-- `input_boolean.pc_a`
-- `input_boolean.pc_b`
-- `input_boolean.pc_c`
+- `pc_entity_id`
+- `entity_id.ac`
+- `entity_id.ambient_light`
+- `entity_id.main_light`
+- `entity_id.door_sign_light`
 
-客户端启动时把自己的开关置为 `on`。
-客户端关机时把自己的开关置为 `off`。
+这些字段都可以不填；但如果要启用“最后一台电脑离线后延迟 30 秒关闭空调和灯”，每台电脑都必须配置 `pc_entity_id`。
 
-### 2. 同房间电脑放进一个 `group`
+### `pc_entity_id` 的含义
 
-把同一房间的电脑开关放入一个组，例如：
+`pc_entity_id` 仍然表示“这台电脑是否在线”。它是电脑级实体，不是房间级实体。
 
-- `group.room_1_pcs`
+前提：如果要启用“最后一台电脑离线后延迟 30 秒关闭空调和灯”，每台电脑都必须配置 `pc_entity_id`。
 
-这个组代表“这个房间所有电脑的在线集合”。
+一间房里如果有多台电脑，就会有多个 `pc_entity_id`，例如：
 
-### 3. HA 自动化根据组状态控制设备
+- `input_boolean.room1_pc_a_online`
+- `input_boolean.room1_pc_b_online`
+- `input_boolean.room1_pc_c_online`
 
-- 组内任意一个开关变成 `on` -> 打开该房间的空调和灯
-- 整个组变成 `off` -> 关闭该房间的空调和灯
+## 房间级聚合
 
-这样就不需要客户端自己判断“是不是最后一台”。
+HA 为每个房间创建一个聚合传感器，例如：
 
-## 工作流程示例
+- `binary_sensor.room1_any_pc_online`
+
+它的语义是：
+
+- 任意一台电脑在线 -> `on`
+- 全部电脑离线 -> `off`
+
+这个聚合传感器由同房间的多个 `pc_entity_id` 计算得到。
+
+没有 `pc_entity_id` 时，HA 没法判断房间里是不是最后一台电脑，因此也就无法做 30 秒延迟关闭。
+
+## 控制逻辑
 
 ### 开机
 
+如果 `pc_entity_id` 已配置：
+
 1. 电脑 A 启动
-2. 客户端把 `input_boolean.pc_a` 置为 `on`
-3. `group.room_1_pcs` 变为 `on`
-4. HA 自动化触发，打开空调和灯
+2. App 把 `input_boolean.room1_pc_a_online` 置为 `on`
+3. `binary_sensor.room1_any_pc_online` 变为 `on`
+4. HA 自动化立即打开该房间的空调和已配置的灯
+
+如果 `pc_entity_id` 未配置：
+
+1. 电脑 A 启动
+2. App 直接开启该电脑配置的空调和灯
 
 ### 关机
 
+如果 `pc_entity_id` 已配置：
+
 1. 电脑 A 关机
-2. 客户端把 `input_boolean.pc_a` 置为 `off`
-3. 如果组内还有其他电脑是 `on`，空调和灯保持开启
-4. 如果组内所有电脑都变成 `off`，HA 自动化触发，关闭空调和灯
-
-## YAML 示例
-
-> 下面示例假设你已经有：
-> - 电脑开关：`input_boolean.pc_a`、`input_boolean.pc_b`、`input_boolean.pc_c`
-> - 房间组：`group.room_1_pcs`
-> - 空调：`climate.room_1_ac`
-> - 灯光：`light.room_1_light`
-
-### 一整套可复制配置
-
-```yaml
-input_boolean:
-  pc_a:
-    name: 房间1电脑A
-    icon: mdi:monitor
-  pc_b:
-    name: 房间1电脑B
-    icon: mdi:monitor
-  pc_c:
-    name: 房间1电脑C
-    icon: mdi:monitor
-
-group:
-  room_1_pcs:
-    name: 房间1电脑组
-    entities:
-      - input_boolean.pc_a
-      - input_boolean.pc_b
-      - input_boolean.pc_c
-
-automation:
-  - alias: 房间1-电脑开机开启空调和灯
-    id: room_1_pcs_on
-    mode: single
-    trigger:
-      - platform: state
-        entity_id:
-          - input_boolean.pc_a
-          - input_boolean.pc_b
-          - input_boolean.pc_c
-        to: "on"
-    action:
-      - service: climate.turn_on
-        target:
-          entity_id: climate.room_1_ac
-      - service: light.turn_on
-        target:
-          entity_id: light.room_1_light
-
-  - alias: 房间1-全部电脑关闭后关闭空调和灯
-    id: room_1_pcs_off
-    mode: single
-    trigger:
-      - platform: state
-        entity_id: group.room_1_pcs
-        to: "off"
-    action:
-      - service: climate.turn_off
-        target:
-          entity_id: climate.room_1_ac
-      - service: light.turn_off
-        target:
-          entity_id: light.room_1_light
-```
-
-### 多房间模板版
-
-如果你有多个房间，可以按下面的方式复制一份模板，只需要替换房间编号和实体 ID。
-
-```yaml
-input_boolean:
-  room_1_pc_a:
-    name: 房间1电脑A
-    icon: mdi:monitor
-  room_1_pc_b:
-    name: 房间1电脑B
-    icon: mdi:monitor
-
-  room_2_pc_a:
-    name: 房间2电脑A
-    icon: mdi:monitor
-  room_2_pc_b:
-    name: 房间2电脑B
-    icon: mdi:monitor
-
-group:
-  room_1_pcs:
-    name: 房间1电脑组
-    entities:
-      - input_boolean.room_1_pc_a
-      - input_boolean.room_1_pc_b
-
-  room_2_pcs:
-    name: 房间2电脑组
-    entities:
-      - input_boolean.room_2_pc_a
-      - input_boolean.room_2_pc_b
-
-automation:
-  - alias: 房间1-电脑开机开启空调和灯
-    id: room_1_pcs_on
-    mode: single
-    trigger:
-      - platform: state
-        entity_id:
-          - input_boolean.room_1_pc_a
-          - input_boolean.room_1_pc_b
-        to: "on"
-    action:
-      - service: climate.turn_on
-        target:
-          entity_id: climate.room_1_ac
-      - service: light.turn_on
-        target:
-          entity_id: light.room_1_light
-
-  - alias: 房间1-全部电脑关闭后关闭空调和灯
-    id: room_1_pcs_off
-    mode: single
-    trigger:
-      - platform: state
-        entity_id: group.room_1_pcs
-        to: "off"
-    action:
-      - service: climate.turn_off
-        target:
-          entity_id: climate.room_1_ac
-      - service: light.turn_off
-        target:
-          entity_id: light.room_1_light
-
-  - alias: 房间2-电脑开机开启空调和灯
-    id: room_2_pcs_on
-    mode: single
-    trigger:
-      - platform: state
-        entity_id:
-          - input_boolean.room_2_pc_a
-          - input_boolean.room_2_pc_b
-        to: "on"
-    action:
-      - service: climate.turn_on
-        target:
-          entity_id: climate.room_2_ac
-      - service: light.turn_on
-        target:
-          entity_id: light.room_2_light
-
-  - alias: 房间2-全部电脑关闭后关闭空调和灯
-    id: room_2_pcs_off
-    mode: single
-    trigger:
-      - platform: state
-        entity_id: group.room_2_pcs
-        to: "off"
-    action:
-      - service: climate.turn_off
-        target:
-          entity_id: climate.room_2_ac
-      - service: light.turn_off
-        target:
-          entity_id: light.room_2_light
-```
-
-## 这份 YAML 怎么放到 Home Assistant
-
-你可以用下面两种方式之一：
-
-### 方式 1：直接写到 `configuration.yaml`
-
-把 `input_boolean`、`group`、`automation` 三段内容分别放到 Home Assistant 的主配置中。
-
-适合：
-
-- 测试环境
-- 配置量不大
-- 想先快速跑通
-
-### 方式 2：拆分成独立文件再 `!include`
-
-推荐这种方式，后期维护更清晰。
-
-例如：
-
-```yaml
-input_boolean: !include input_boolean.yaml
-group: !include groups.yaml
-automation: !include automations.yaml
-```
-
-然后分别创建：
-
-- `input_boolean.yaml`
-- `groups.yaml`
-- `automations.yaml`
-
-把对应内容放进去。
-
-### 配置建议
-
-- 每个房间单独一组 `group.xxx`
-- 每台电脑一个 `input_boolean`
-- 自动化里尽量使用明确的实体名，不要混用模糊命名
-- 如果后面要扩展灯光、空调、投影仪等设备，建议每类设备都单独做自动化
-
-## 客户端该怎么上报 on/off
-
-Windows 客户端不需要判断“是不是最后一台”，只需要上报自己的状态：
-
-### 开机时
-
-客户端启动后：
-
-1. 读取自己的 `config.json`
-2. 调用 Home Assistant 的 `input_boolean/turn_on`
-3. 把自己的 `pc_entity_id` 置为 `on`
-
-这表示：
-
-- 这台电脑在线
-- 房间里至少有一台电脑在用
-
-### 关机时
-
-Windows 关机前：
-
-1. 拦截 `WM_QUERYENDSESSION`
-2. 调用 Home Assistant 的 `input_boolean/turn_off`
-3. 把自己的 `pc_entity_id` 置为 `off`
-
-这表示：
-
-- 这台电脑离线
-- 如果组里所有电脑都离线了，HA 自动化就会关闭空调和灯
-
-### 客户端配置中需要什么
-
-每台客户端只需要知道自己的：
-
-- `ha_url`
-- `token`
-- `pc_entity_id`
-
-它不需要知道：
-
-- 同房间还有几台电脑
-- 自己是不是最后一台
-- 什么时候该关空调和灯
-
-这些都交给 Home Assistant 侧的 `group` 和自动化处理。
-
-### 1. 组定义
-
-```yaml
-group:
-  room_1_pcs:
-    name: 房间1电脑组
-    entities:
-      - input_boolean.pc_a
-      - input_boolean.pc_b
-      - input_boolean.pc_c
-```
-
-### 2. 开机自动化
-
-当任意电脑开机，把自己的开关置 `on` 后，触发空调和灯打开：
-
-```yaml
-automation:
-  - alias: 房间1-电脑开机开启空调和灯
-    mode: single
-    trigger:
-      - platform: state
-        entity_id:
-          - input_boolean.pc_a
-          - input_boolean.pc_b
-          - input_boolean.pc_c
-        to: "on"
-    action:
-      - service: climate.turn_on
-        target:
-          entity_id: climate.room_1_ac
-      - service: light.turn_on
-        target:
-          entity_id: light.room_1_light
-```
-
-### 3. 关机自动化
-
-当整个组都变成 `off`，说明所有电脑都关机了，触发空调和灯关闭：
-
-```yaml
-automation:
-  - alias: 房间1-全部电脑关闭后关闭空调和灯
-    mode: single
-    trigger:
-      - platform: state
-        entity_id: group.room_1_pcs
-        to: "off"
-    action:
-      - service: climate.turn_off
-        target:
-          entity_id: climate.room_1_ac
-      - service: light.turn_off
-        target:
-          entity_id: light.room_1_light
-```
-
-## 客户端职责
-
-Windows 客户端只做两件事：
-
-- 启动时把自己的 `input_boolean` 置为 `on`
-- 关机时把自己的 `input_boolean` 置为 `off`
-
-不要让客户端判断：
-
-- 组里还有几台电脑在线
-- 自己是不是最后一台
-- 现在是否该关闭空调和灯
-
-这些都交给 Home Assistant 处理。
-
-## 优点
-
-- 不依赖客户端之间同步
-- 状态判断集中在 Home Assistant
-- 逻辑更可靠，更适合网吧环境
-- 某台电脑掉线不影响整体策略
-
-## 备注
-
-- 如果你要区分不同房间，只要为每个房间各建一个组即可
-- 如果房间里电脑数量变化，只需要更新对应组里的实体列表
-- 如果后续想更细，可以把“开空调”和“开灯”拆成不同自动化
+2. App 把 `input_boolean.room1_pc_a_online` 置为 `off`
+3. 如果房间里还有其他电脑在线，房间级传感器仍然是 `on`
+4. 如果这是最后一台电脑，房间级传感器变成 `off`
+5. HA 延迟 30 秒
+6. 30 秒内如果又有任意电脑上线，取消关机动作
+7. 30 秒后仍然离线，关闭该房间的空调和已配置的灯
+
+如果 `pc_entity_id` 未配置：
+
+1. 电脑 A 关机
+2. App 直接关闭该电脑配置的空调和灯
+
+## 推荐 HA 实现
+
+### 1. 房间聚合传感器
+
+每个房间建一个 `template binary_sensor`，把同房间电脑的在线状态 OR 起来。
+
+### 2. Blueprint automation
+
+每个房间只建一个 blueprint 实例，输入：
+
+- `room_online_entity`
+- `ac_entity`
+- `ambient_light_entity`
+- `main_light_entity`
+- `door_sign_light_entity`
+- `delay_seconds`
+
+`door_sign_light_entity`、`ambient_light_entity`、`main_light_entity`、`ac_entity` 都可以按房间实际情况不填。
+
+### 3. 设备可选
+
+如果某个房间没有门牌灯、没有氛围灯、甚至没有主灯，只要 blueprint 实例里不填对应项即可。
+
+## 示例
+
+### 房间 1
+
+电脑：
+
+- `input_boolean.room1_pc_a_online`
+- `input_boolean.room1_pc_b_online`
+- `input_boolean.room1_pc_c_online`
+
+聚合传感器：
+
+- `binary_sensor.room1_any_pc_online`
+
+设备：
+
+- `climate.room1_ac`
+- `switch.room1_ambient_light`
+- `light.room1_main_light`
+- `switch.room1_door_sign_light`
+
+### 房间 1 blueprint 实例
+
+- `room_online_entity`: `binary_sensor.room1_any_pc_online`
+- `ac_entity`: `climate.room1_ac`
+- `ambient_light_entity`: `switch.room1_ambient_light`
+- `main_light_entity`: `light.room1_main_light`
+- `door_sign_light_entity`: `switch.room1_door_sign_light`
+- `delay_seconds`: `30`
+
+### 房间 2（没有门牌灯）
+
+电脑：
+
+- `input_boolean.room2_pc_a_online`
+- `input_boolean.room2_pc_b_online`
+
+聚合传感器：
+
+- `binary_sensor.room2_any_pc_online`
+
+设备：
+
+- `climate.room2_ac`
+- `switch.room2_ambient_light`
+- `light.room2_main_light`
+
+这个房间没有门牌灯，所以不需要配置 `door_sign_light_entity`。
+
+### 房间 2 blueprint 实例
+
+- `room_online_entity`: `binary_sensor.room2_any_pc_online`
+- `ac_entity`: `climate.room2_ac`
+- `ambient_light_entity`: `switch.room2_ambient_light`
+- `main_light_entity`: `light.room2_main_light`
+- `door_sign_light_entity`: 留空
+- `delay_seconds`: `30`
+
+### 这个例子怎么跑
+
+房间 1：
+
+1. `room1_pc_a_online` 变成 `on`
+2. `room1_any_pc_online` 变成 `on`
+3. blueprint 立即打开 `room1_ac`、`room1_ambient_light`、`room1_main_light`、`room1_door_sign_light`
+4. 所有房间 1 电脑都变成 `off` 并持续 30 秒后，blueprint 再关闭这些设备
+
+房间 2：
+
+1. `room2_pc_b_online` 变成 `on`
+2. `room2_any_pc_online` 变成 `on`
+3. blueprint 立即打开 `room2_ac`、`room2_ambient_light`、`room2_main_light`
+4. `door_sign_light_entity` 没有配置，所以门牌灯不会被控制
+5. 所有房间 2 电脑都变成 `off` 并持续 30 秒后，blueprint 只关闭已配置的设备
+
+## 结论
+
+这套方案保留了 `config.json` 的电脑级可选配置，同时把“最后一台电脑”的判断上移到 HA 的房间级聚合层。这样既能支持多房间，也能支持每个房间设备不完全相同的情况。
