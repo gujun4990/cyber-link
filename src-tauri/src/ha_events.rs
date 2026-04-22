@@ -1,5 +1,6 @@
 use crate::models::AppConfig;
 use serde_json::Value;
+use std::time::Duration;
 
 pub fn websocket_url_from_http_url(http_url: &str) -> String {
     let base = http_url.trim_end_matches('/');
@@ -35,16 +36,39 @@ pub fn should_refresh_snapshot(config: &AppConfig, entity_id: &str) -> bool {
         || config.pc_entity_id() == Some(entity_id)
 }
 
+pub(crate) fn websocket_idle_ping_after() -> Duration {
+    Duration::from_secs(30)
+}
+
+pub(crate) fn websocket_pong_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+pub(crate) fn should_send_idle_ping(last_seen: std::time::Instant, now: std::time::Instant) -> bool {
+    now.duration_since(last_seen) >= websocket_idle_ping_after()
+}
+
+pub(crate) fn should_timeout_pending_ping(
+    ping_sent_at: std::time::Instant,
+    now: std::time::Instant,
+) -> bool {
+    now.duration_since(ping_sent_at) >= websocket_pong_timeout()
+}
+
 #[cfg(windows)]
 mod windows_listener {
-    use super::{entity_id_from_state_changed_event, should_refresh_snapshot, websocket_url_from_http_url};
+    use super::{
+        entity_id_from_state_changed_event, should_refresh_snapshot, should_send_idle_ping,
+        should_timeout_pending_ping, websocket_idle_ping_after, websocket_pong_timeout,
+        websocket_url_from_http_url,
+    };
     use crate::{log_line, refresh_snapshot_with_retry, models::AppConfig, SharedState};
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{json, Value};
     use std::sync::OnceLock;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tauri::{AppHandle, Manager};
-    use tokio::time::sleep;
+    use tokio::time::{sleep, Instant as TokioInstant};
     use tokio_tungstenite::{connect_async, tungstenite::Message};
 
     static LISTENER_STARTED: OnceLock<()> = OnceLock::new();
@@ -116,26 +140,74 @@ mod windows_listener {
             ))
             .await?;
 
-        while let Some(message) = socket.next().await {
-            let message = message?;
-            match message {
-                Message::Text(text) => {
-                    let payload: Value = serde_json::from_str(&text)?;
-                    if let Some(entity_id) = entity_id_from_state_changed_event(&payload) {
-                        if should_refresh_snapshot(config, entity_id) {
-                            refresh_and_emit(app, config).await?;
+        log_line("INFO", "ha websocket listener connected");
+        refresh_and_emit(app, config).await?;
+
+        let (mut sink, mut stream) = socket.split();
+        let mut last_seen = Instant::now();
+        let mut ping_sent_at: Option<Instant> = None;
+        let mut ping_nonce: u64 = 1;
+
+        loop {
+            let now = Instant::now();
+            let deadline = if let Some(sent_at) = ping_sent_at {
+                if should_timeout_pending_ping(sent_at, now) {
+                    return Err(anyhow::anyhow!("home assistant websocket ping timeout"));
+                }
+                sent_at + websocket_pong_timeout()
+            } else {
+                last_seen + websocket_idle_ping_after()
+            };
+
+            let sleep_until = TokioInstant::from_std(deadline);
+            let timer = tokio::time::sleep_until(sleep_until);
+            tokio::pin!(timer);
+
+            tokio::select! {
+                maybe_message = stream.next() => {
+                    let message = match maybe_message {
+                        Some(message) => message?,
+                        None => return Ok(()),
+                    };
+
+                    last_seen = Instant::now();
+                    ping_sent_at = None;
+
+                    match message {
+                        Message::Text(text) => {
+                            let payload: Value = serde_json::from_str(&text)?;
+                            if let Some(entity_id) = entity_id_from_state_changed_event(&payload) {
+                                if should_refresh_snapshot(config, entity_id) {
+                                    refresh_and_emit(app, config).await?;
+                                }
+                            }
                         }
+                        Message::Ping(payload) => {
+                            sink.send(Message::Pong(payload)).await?;
+                        }
+                        Message::Pong(_) => {}
+                        Message::Close(_) => return Ok(()),
+                        _ => {}
                     }
                 }
-                Message::Ping(payload) => {
-                    socket.send(Message::Pong(payload)).await?;
+                _ = &mut timer => {
+                    let now = Instant::now();
+
+                    if let Some(sent_at) = ping_sent_at {
+                        if should_timeout_pending_ping(sent_at, now) {
+                            return Err(anyhow::anyhow!("home assistant websocket ping timeout"));
+                        }
+                        continue;
+                    }
+
+                    if should_send_idle_ping(last_seen, now) {
+                        sink.send(Message::Ping(ping_nonce.to_be_bytes().to_vec().into())).await?;
+                        ping_nonce = ping_nonce.wrapping_add(1);
+                        ping_sent_at = Some(now);
+                    }
                 }
-                Message::Close(_) => return Ok(()),
-                _ => {}
             }
         }
-
-        Err(anyhow::anyhow!("home assistant websocket closed"))
     }
 
     async fn refresh_and_emit(app: &AppHandle, config: &AppConfig) -> anyhow::Result<()> {
@@ -155,8 +227,13 @@ pub(crate) use windows_listener::spawn_state_listener_once;
 
 #[cfg(test)]
 mod tests {
-    use super::{entity_id_from_state_changed_event, should_refresh_snapshot, websocket_url_from_http_url};
+    use super::{
+        entity_id_from_state_changed_event, should_refresh_snapshot,
+        should_send_idle_ping, should_timeout_pending_ping, websocket_idle_ping_after,
+        websocket_pong_timeout, websocket_url_from_http_url,
+    };
     use crate::models::{AppConfig, DeviceIds};
+    use std::time::{Duration, Instant};
 
     fn sample_config() -> AppConfig {
         AppConfig {
@@ -208,5 +285,23 @@ mod tests {
         assert!(should_refresh_snapshot(&config, "switch.office_light"));
         assert!(should_refresh_snapshot(&config, "input_boolean.pc_05_online"));
         assert!(!should_refresh_snapshot(&config, "climate.room2_ac"));
+    }
+
+    #[test]
+    fn idle_ping_starts_after_threshold() {
+        let now = Instant::now();
+
+        assert!(!should_send_idle_ping(now - Duration::from_secs(29), now));
+        assert!(should_send_idle_ping(now - Duration::from_secs(30), now));
+        assert_eq!(websocket_idle_ping_after(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn pending_ping_times_out_after_threshold() {
+        let now = Instant::now();
+
+        assert!(!should_timeout_pending_ping(now - Duration::from_secs(9), now));
+        assert!(should_timeout_pending_ping(now - Duration::from_secs(10), now));
+        assert_eq!(websocket_pong_timeout(), Duration::from_secs(10));
     }
 }
