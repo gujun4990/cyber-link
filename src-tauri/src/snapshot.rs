@@ -1,7 +1,7 @@
 use crate::models::{AppConfig, DeviceSnapshot, HaEntityState, SwitchState};
 use crate::temperature::temperature_from_attributes;
 
-pub fn initial_snapshot() -> DeviceSnapshot {
+pub fn initial_snapshot(light_count: u8) -> DeviceSnapshot {
     DeviceSnapshot {
         room: "核心-01".into(),
         pc_id: "终端-05".into(),
@@ -14,33 +14,59 @@ pub fn initial_snapshot() -> DeviceSnapshot {
             is_on: true,
             is_available: true,
         },
+        main_light: SwitchState {
+            is_on: true,
+            is_available: true,
+        },
+        door_sign_light: SwitchState {
+            is_on: true,
+            is_available: true,
+        },
         switch_on: true,
+        main_light_on: true,
+        door_sign_light_on: true,
         ac_available: true,
         switch_available: true,
+        main_light_available: true,
+        door_sign_light_available: true,
+        light_count,
         connected: true,
     }
 }
 
 pub fn offline_snapshot(_config: &AppConfig) -> DeviceSnapshot {
-    let mut snapshot = initial_snapshot();
+    let mut snapshot = initial_snapshot(_config.light_count());
     snapshot.connected = false;
     snapshot.set_ac_available(false);
-    snapshot.set_switch_available(false);
+    snapshot.set_ambient_light_available(false);
+    snapshot.set_main_light_available(false);
+    snapshot.set_door_sign_light_available(false);
     snapshot.set_ac_on(false);
-    snapshot.set_switch_on(false);
+    snapshot.set_ambient_light_on(false);
+    snapshot.set_main_light_on(false);
+    snapshot.set_door_sign_light_on(false);
 
     snapshot
 }
 
 pub fn snapshot_from_loaded_states(
+    light_count: u8,
     pc_state: Option<&HaEntityState>,
     ac_state: Option<&HaEntityState>,
-    switch_state: Option<&HaEntityState>,
+    ambient_light_state: Option<&HaEntityState>,
+    main_light_state: Option<&HaEntityState>,
+    door_sign_light_state: Option<&HaEntityState>,
 ) -> DeviceSnapshot {
-    let mut snapshot = initial_snapshot();
-    snapshot.connected = pc_state.is_some() || ac_state.is_some() || switch_state.is_some();
+    let mut snapshot = initial_snapshot(light_count);
+    snapshot.connected = pc_state.is_some()
+        || ac_state.is_some()
+        || ambient_light_state.is_some()
+        || main_light_state.is_some()
+        || door_sign_light_state.is_some();
     snapshot.set_ac_available(false);
-    snapshot.set_switch_available(false);
+    snapshot.set_ambient_light_available(false);
+    snapshot.set_main_light_available(false);
+    snapshot.set_door_sign_light_available(false);
 
     if let Some(ac_state) = ac_state {
         let is_available = !ac_state.state.eq_ignore_ascii_case("unavailable");
@@ -57,13 +83,35 @@ pub fn snapshot_from_loaded_states(
         snapshot.set_ac_on(false);
     }
 
-    if let Some(switch_state) = switch_state {
-        let is_available = !switch_state.state.eq_ignore_ascii_case("unavailable");
-        snapshot.set_switch_available(is_available);
-        snapshot.set_switch_on(is_available && switch_state.state.eq_ignore_ascii_case("on"));
+    if let Some(ambient_light_state) = ambient_light_state {
+        let is_available = !ambient_light_state.state.eq_ignore_ascii_case("unavailable");
+        snapshot.set_ambient_light_available(is_available);
+        snapshot.set_ambient_light_on(
+            is_available && ambient_light_state.state.eq_ignore_ascii_case("on"),
+        );
     } else {
-        snapshot.set_switch_available(false);
-        snapshot.set_switch_on(false);
+        snapshot.set_ambient_light_available(false);
+        snapshot.set_ambient_light_on(false);
+    }
+
+    if let Some(main_light_state) = main_light_state {
+        let is_available = !main_light_state.state.eq_ignore_ascii_case("unavailable");
+        snapshot.set_main_light_available(is_available);
+        snapshot.set_main_light_on(is_available && main_light_state.state.eq_ignore_ascii_case("on"));
+    } else {
+        snapshot.set_main_light_available(false);
+        snapshot.set_main_light_on(false);
+    }
+
+    if let Some(door_sign_light_state) = door_sign_light_state {
+        let is_available = !door_sign_light_state.state.eq_ignore_ascii_case("unavailable");
+        snapshot.set_door_sign_light_available(is_available);
+        snapshot.set_door_sign_light_on(
+            is_available && door_sign_light_state.state.eq_ignore_ascii_case("on"),
+        );
+    } else {
+        snapshot.set_door_sign_light_available(false);
+        snapshot.set_door_sign_light_on(false);
     }
 
     snapshot
@@ -74,37 +122,65 @@ fn deserialize_entity_state(value: &serde_json::Value) -> anyhow::Result<HaEntit
 }
 
 fn snapshot_from_json_states(
+    light_count: u8,
     pc_state: &serde_json::Value,
     ac_state: Option<&serde_json::Value>,
-    switch_state: Option<&serde_json::Value>,
+    ambient_light_state: Option<&serde_json::Value>,
+    main_light_state: Option<&serde_json::Value>,
+    door_sign_light_state: Option<&serde_json::Value>,
 ) -> anyhow::Result<DeviceSnapshot> {
     let pc_state = deserialize_entity_state(pc_state)?;
     let ac_state = ac_state.map(deserialize_entity_state).transpose()?;
-    let switch_state = switch_state.map(deserialize_entity_state).transpose()?;
+    let ambient_light_state = ambient_light_state.map(deserialize_entity_state).transpose()?;
+    let main_light_state = main_light_state.map(deserialize_entity_state).transpose()?;
+    let door_sign_light_state = door_sign_light_state.map(deserialize_entity_state).transpose()?;
 
     Ok(snapshot_from_loaded_states(
+        light_count,
         Some(&pc_state),
         ac_state.as_ref(),
-        switch_state.as_ref(),
+        ambient_light_state.as_ref(),
+        main_light_state.as_ref(),
+        door_sign_light_state.as_ref(),
     ))
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn snapshot_from_home_assistant(
+    light_count: u8,
     pc_state: &serde_json::Value,
     ac_state: &serde_json::Value,
-    switch_state: &serde_json::Value,
+    ambient_light_state: &serde_json::Value,
+    main_light_state: &serde_json::Value,
+    door_sign_light_state: &serde_json::Value,
 ) -> anyhow::Result<DeviceSnapshot> {
-    snapshot_from_json_states(pc_state, Some(ac_state), Some(switch_state))
+    snapshot_from_json_states(
+        light_count,
+        pc_state,
+        Some(ac_state),
+        Some(ambient_light_state),
+        Some(main_light_state),
+        Some(door_sign_light_state),
+    )
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn snapshot_from_optional_home_assistant(
+    light_count: u8,
     pc_state: &serde_json::Value,
     ac_state: Option<&serde_json::Value>,
-    switch_state: Option<&serde_json::Value>,
+    ambient_light_state: Option<&serde_json::Value>,
+    main_light_state: Option<&serde_json::Value>,
+    door_sign_light_state: Option<&serde_json::Value>,
 ) -> anyhow::Result<DeviceSnapshot> {
-    snapshot_from_json_states(pc_state, ac_state, switch_state)
+    snapshot_from_json_states(
+        light_count,
+        pc_state,
+        ac_state,
+        ambient_light_state,
+        main_light_state,
+        door_sign_light_state,
+    )
 }
 
 #[cfg(test)]
@@ -122,7 +198,8 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: ac.map(str::to_string),
-                switch: switch.map(str::to_string),
+                ambient_light: switch.map(str::to_string),
+                ..Default::default()
             }),
         }
     }
@@ -155,7 +232,7 @@ mod tests {
             attributes: serde_json::json!({"temperature": 24.6}),
         };
 
-        let snapshot = snapshot_from_loaded_states(Some(&pc_state), Some(&ac_state), None);
+        let snapshot = snapshot_from_loaded_states(0, Some(&pc_state), Some(&ac_state), None, None, None);
 
         assert!(snapshot.connected);
         assert!(snapshot.ac.is_available);
@@ -181,7 +258,7 @@ mod tests {
             }),
         };
 
-        let snapshot = snapshot_from_loaded_states(Some(&pc_state), Some(&ac_state), None);
+        let snapshot = snapshot_from_loaded_states(0, Some(&pc_state), Some(&ac_state), None, None, None);
 
         assert!(snapshot.ac.is_available);
         assert_eq!(snapshot.ac.temp, 25);
@@ -200,13 +277,20 @@ mod tests {
                 "temperature_unit": "°C"
             }),
         };
-        let switch_state = HaEntityState {
+        let ambient_light_state = HaEntityState {
             state: "unavailable".into(),
             attributes: serde_json::json!({}),
         };
 
         let snapshot =
-            snapshot_from_loaded_states(Some(&pc_state), Some(&ac_state), Some(&switch_state));
+            snapshot_from_loaded_states(
+                0,
+                Some(&pc_state),
+                Some(&ac_state),
+                Some(&ambient_light_state),
+                None,
+                None,
+            );
 
         assert!(snapshot.connected);
         assert!(!snapshot.ac.is_available);
@@ -221,9 +305,16 @@ mod tests {
     fn snapshot_from_home_assistant_parses_required_entities() {
         let pc_state = serde_json::json!({"state": "on", "attributes": {}});
         let ac_state = serde_json::json!({"state": "cool", "attributes": {"temperature": 24}});
-        let switch_state = serde_json::json!({"state": "off", "attributes": {}});
+        let ambient_light_state = serde_json::json!({"state": "off", "attributes": {}});
 
-        let snapshot = snapshot_from_home_assistant(&pc_state, &ac_state, &switch_state)
+        let snapshot = snapshot_from_home_assistant(
+            1,
+            &pc_state,
+            &ac_state,
+            &ambient_light_state,
+            &serde_json::json!({"state": "on", "attributes": {}}),
+            &serde_json::json!({"state": "off", "attributes": {}}),
+        )
             .expect("snapshot should build");
 
         assert!(snapshot.connected);
@@ -241,7 +332,14 @@ mod tests {
         let pc_state = serde_json::json!({"state": "on", "attributes": {}});
         let ac_state = serde_json::json!({"state": "cool", "attributes": {"temperature": 24}});
 
-        let snapshot = snapshot_from_optional_home_assistant(&pc_state, Some(&ac_state), None)
+        let snapshot = snapshot_from_optional_home_assistant(
+            1,
+            &pc_state,
+            Some(&ac_state),
+            None,
+            None,
+            None,
+        )
             .expect("snapshot should build");
 
         assert!(snapshot.connected);

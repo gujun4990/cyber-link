@@ -5,11 +5,13 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const runtimeMode = env.VITE_CYBER_LINK_RUNTIME ?? 'tauri';
   return {
     base: './',
     plugins: [react(), tailwindcss()],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      'import.meta.env.VITE_CYBER_LINK_RUNTIME': JSON.stringify(runtimeMode),
     },
     resolve: {
       alias: {

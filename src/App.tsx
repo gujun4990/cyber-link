@@ -1,7 +1,4 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
-import { listen } from '@tauri-apps/api/event';
-import { appWindow, LogicalSize } from '@tauri-apps/api/window';
 import {
   ChevronDown,
   ChevronUp,
@@ -18,6 +15,9 @@ import { motion } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
 import { applyStateRefresh } from './appState.js';
 import { withTimeout } from './initTimeout.js';
+import { buildLightingCards, type LightingCard, type LightingKind } from './lightingCards';
+import { createAppRuntime, type ActionName, type DeviceState } from './appRuntime';
+import type { RuntimeMode } from './runtimeMode';
 import windowSize from './shared/windowSize.json';
 
 const consoleLogLevels = ['warn', 'error'] as const;
@@ -32,31 +32,34 @@ function formatLogLine(level: ConsoleLogLevelName, message: string) {
   return `${new Date().toISOString()} [${level}] ${message}`;
 }
 
-interface ACState {
-  isOn: boolean;
-  temp: number;
-}
-
-interface DeviceState {
-  room: string;
-  pcId: string;
-  ac: ACState;
-  switchOn: boolean;
-  acAvailable: boolean;
-  switchAvailable: boolean;
-  connected: boolean;
-  initError?: string;
-}
+const runtimeMode = (import.meta.env.VITE_CYBER_LINK_RUNTIME ?? 'tauri') as RuntimeMode;
+const runtime = createAppRuntime({ mode: runtimeMode });
 
 const innerRingSpinTransition = { duration: 34, repeat: Infinity, ease: 'linear' };
-const shimmerTransition = { duration: 7, repeat: Infinity, ease: 'linear' };
-const toggleShimmerTransition = { duration: 8, repeat: Infinity, ease: 'linear' };
-const tickerTransition = { duration: 60, repeat: Infinity, ease: 'linear' };
 
-const tickerLines = Array.from(
-  { length: 10 },
-  (_, i) => `SYSTEM_CORE_LOAD: ${35 + ((i * 9) % 61)}% - TEMP_STABLE`,
-);
+function lightingIconFor(kind: LightingKind, active: boolean, isCompact: boolean) {
+  const size = isCompact ? 20 : 24;
+  const className = active ? 'text-yellow-100' : 'text-white/70';
+
+  if (kind === 'ambientLight') {
+    return (
+      <Lightbulb
+        size={size}
+        className={className}
+        style={
+          active
+            ? {
+                filter:
+                  'drop-shadow(0 0 10px rgba(255,240,180,0.9)) drop-shadow(0 0 18px rgba(255,220,120,0.7))',
+              }
+            : undefined
+        }
+      />
+    );
+  }
+
+  return <Lightbulb size={size} className={className} />;
+}
 
 function useLatestRef<T>(value: T) {
   const ref = useRef(value);
@@ -175,6 +178,8 @@ const TechToggle = memo(function TechToggle({
   label,
   subLabel,
   icon,
+  className,
+  isCompact = false,
 }: {
   active: boolean;
   onClick: () => void;
@@ -182,6 +187,8 @@ const TechToggle = memo(function TechToggle({
   label: string;
   subLabel: string;
   icon: React.ReactNode;
+  className?: string;
+  isCompact?: boolean;
 }) {
   return (
     <motion.button
@@ -189,46 +196,56 @@ const TechToggle = memo(function TechToggle({
       whileTap={disabled ? {} : { scale: 0.985 }}
       onClick={onClick}
       disabled={disabled}
-      className={`relative w-full p-4 rounded-xl border ring-1 ring-white/5 transition-all duration-500 flex items-center gap-5 overflow-hidden group ${
+      className={`relative w-full rounded-xl border ring-1 ring-white/5 transition-all duration-500 flex items-center overflow-hidden group ${
         disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+      } ${
+        isCompact ? 'px-2 py-3 gap-2' : 'px-3.5 py-2.5 gap-3.5'
       } ${
         active
           ? 'bg-cyan-400/40 border-cyan-100 text-white shadow-[0_0_12px_rgba(6,182,212,0.35)]'
           : 'bg-[#2a3b7d]/78 border-white/18 text-white/50 shadow-inner ring-white/10'
-      }`}
+      } ${className ?? ''}`}
       style={{ transform: 'translateZ(0)' }}
     >
       <div className="absolute inset-0 bg-carbon mix-blend-overlay opacity-5 pointer-events-none" />
 
       <div
-        className={`p-3 rounded-lg border transition-all duration-500 relative overflow-hidden ${
+        className={`rounded-lg border transition-all duration-500 relative overflow-hidden flex-shrink-0 ${
+          isCompact ? 'p-1.5' : 'p-2.5'
+        } ${
           active
             ? 'border-cyan-100 bg-cyan-400/40 shadow-[0_0_12px_rgba(6,182,212,0.35)]'
             : 'border-white/10 bg-white/5 opacity-50'
         }`}
       >
-        <div className={active && label.includes('空调') ? 'animate-spin opacity-90' : ''}>{icon}</div>
+        <div className={active && label.includes('空调') ? 'animate-spin opacity-90' : ''}>
+          {React.cloneElement(icon as React.ReactElement, { size: isCompact ? 20 : 24 })}
+        </div>
       </div>
 
-      <div className="flex-1 text-left relative z-10">
+      <div className="flex-1 text-left relative z-10 min-w-0">
         <div
-          className={`text-[14px] font-black tracking-[0.1em] antialiased transition-colors duration-300 ${
-            active ? 'text-white' : 'text-white/70'
-          }`}
+          className={`font-black antialiased transition-colors duration-300 ${
+            isCompact
+              ? 'text-[10px] tracking-[0.04em] whitespace-nowrap'
+              : 'text-[14px] tracking-[0.1em] truncate'
+          } ${active ? 'text-white' : 'text-white/70'}`}
         >
           {label}
         </div>
         <div
-          className={`text-[10px] font-bold mt-0.5 transition-colors duration-300 ${
-            active ? 'text-cyan-50' : 'text-white/60'
-          }`}
+          className={`font-bold mt-0.5 transition-colors duration-300 ${
+            isCompact ? 'text-[8px] whitespace-nowrap' : 'text-[10px] truncate'
+          } ${active ? 'text-cyan-50' : 'text-white/60'}`}
         >
           {subLabel}
         </div>
       </div>
 
       <div
-        className={`w-3 h-3 rounded-full transition-all duration-500 ${
+        className={`rounded-full flex-shrink-0 transition-all duration-500 ${
+          isCompact ? 'w-2 h-2 ml-1' : 'w-3 h-3'
+        } ${
           active
             ? 'bg-cyan-100 shadow-[0_0_12px_rgba(6,182,212,0.35)]'
             : 'bg-black/40 border border-white/10'
@@ -244,8 +261,15 @@ export default function App() {
     pcId: '终端-05',
     ac: { isOn: true, temp: 16 },
     switchOn: false,
+    ambientLightOn: false,
+    mainLightOn: false,
+    doorSignLightOn: false,
     acAvailable: true,
     switchAvailable: true,
+    ambientLightAvailable: true,
+    mainLightAvailable: true,
+    doorSignLightAvailable: true,
+    lightCount: 3,
     connected: true,
   });
 
@@ -271,9 +295,29 @@ export default function App() {
     refreshError,
   });
 
+  const lightingCards = useMemo(
+    () =>
+      buildLightingCards({
+        ambientLightAvailable: device.ambientLightAvailable,
+        ambientLightOn: device.ambientLightOn,
+        mainLightAvailable: device.mainLightAvailable,
+        mainLightOn: device.mainLightOn,
+        doorSignLightAvailable: device.doorSignLightAvailable,
+        doorSignLightOn: device.doorSignLightOn,
+      }),
+    [
+      device.ambientLightAvailable,
+      device.ambientLightOn,
+      device.doorSignLightAvailable,
+      device.doorSignLightOn,
+      device.mainLightAvailable,
+      device.mainLightOn,
+    ],
+  );
+
   const logMessage = useCallback(async (message: string) => {
     try {
-      await invoke('append_log_message', { message });
+      await runtime.appendLogMessage(message);
     } catch (error) {
       consoleFallbackRef.current.error('Failed to write app log', error);
     }
@@ -318,14 +362,12 @@ export default function App() {
     let unlisten: null | (() => void) = null;
 
     void (async () => {
-      const autostartMode = await invoke<boolean>('is_autostart_mode');
+      const autostartMode = await runtime.isAutostartMode();
 
-      if (disposed) {
-        return;
-      }
+      if (disposed) return;
 
-      unlisten = await listen<DeviceState>('state-refresh', (event) => {
-        if (!event.payload) return;
+      unlisten = await runtime.subscribeStateRefresh((payload) => {
+        if (!payload) return;
 
         const latest = latestStateRef.current;
         const next = applyStateRefresh(
@@ -336,7 +378,7 @@ export default function App() {
             refreshFailed: latest.refreshFailed,
             refreshError: latest.refreshError,
           },
-          event.payload,
+          payload,
         );
 
         setDevice(next.device);
@@ -353,14 +395,15 @@ export default function App() {
         return;
       }
 
-      await appWindow.setSize(new LogicalSize(windowSize.width, windowSize.height));
+      await runtime.setWindowSize(windowSize.width, windowSize.height);
+
       if (!autostartMode) {
-        await appWindow.show();
+        await runtime.showWindow();
       }
 
       try {
         await withTimeout(
-          invoke<DeviceState>('initialize_app'),
+          runtime.initializeApp(),
           8000,
           'initialize_app timed out',
         );
@@ -381,14 +424,13 @@ export default function App() {
   }, [latestStateRef, reportError]);
 
   const syncDevice = useCallback(
-    async (action: string, value?: number) => {
+    async (request: { action: ActionName; target?: LightingKind; value?: number }) => {
       if (syncingRef.current) return;
 
       syncingRef.current = true;
       setSyncingAction(true);
       try {
-        const payload = value === undefined ? { action } : { action, value };
-        await invoke<DeviceState>('handle_ha_action', payload);
+        await runtime.handleHaAction(request.action, request.target, request.value);
         setActionFailed(false);
       } catch (error) {
         void reportError('Failed to sync device action', error);
@@ -403,28 +445,46 @@ export default function App() {
 
   const toggleAC = useCallback(() => {
     if (!hasLoadedState || syncingAction || !device.acAvailable) return;
-    void syncDevice(ACTIONS.acToggle);
+    void syncDevice({ action: ACTIONS.acToggle });
   }, [device.acAvailable, hasLoadedState, syncingAction, syncDevice]);
 
   const adjustTemp = useCallback(
     async (delta: number) => {
       if (!hasLoadedState || syncingAction || !device.ac.isOn || !device.acAvailable) return;
-      await syncDevice(ACTIONS.acSetTemp, clampTemp(device.ac.temp, delta));
+      await syncDevice({ action: ACTIONS.acSetTemp, value: clampTemp(device.ac.temp, delta) });
     },
     [device.ac.isOn, device.ac.temp, device.acAvailable, hasLoadedState, syncingAction, syncDevice],
   );
 
-  const toggleSwitch = useCallback(() => {
-    if (!hasLoadedState || syncingAction || !device.switchAvailable) return;
-    void syncDevice(ACTIONS.switchToggle);
-  }, [device.switchAvailable, hasLoadedState, syncingAction, syncDevice]);
+  const renderLightingToggle = useCallback(
+    (card: LightingCard, isCompact = false) => {
+      const active = hasLoadedState && device.connected && card.active;
+      const disabled = !hasLoadedState || syncingAction || !device.connected;
+
+      return (
+        <TechToggle
+          isCompact={isCompact}
+          active={active}
+          onClick={() => {
+            if (disabled) return;
+            void syncDevice({ action: ACTIONS.switchToggle, target: card.kind });
+          }}
+          disabled={disabled}
+          label={card.label}
+          subLabel={card.subLabel}
+          icon={lightingIconFor(card.kind, active, isCompact)}
+        />
+      );
+    },
+    [device.connected, hasLoadedState, syncingAction, syncDevice],
+  );
 
   const refreshHaState = useCallback(async () => {
     if (refreshing) return;
 
     setRefreshing(true);
     try {
-      await withTimeout(invoke<DeviceState>('refresh_ha_state'), 8000, 'refresh_ha_state timed out');
+      await withTimeout(runtime.refreshHaState(), 8000, 'refresh_ha_state timed out');
       setHasLoadedState(true);
       setActionFailed(false);
     } catch (error) {
@@ -438,7 +498,7 @@ export default function App() {
 
   const hideWindow = useCallback(async () => {
     try {
-      await appWindow.hide();
+      await runtime.hideWindow();
     } catch (error) {
       void reportError('Failed to hide window', error);
     }
@@ -446,9 +506,9 @@ export default function App() {
 
   const minimizeWindow = useCallback(async () => {
     try {
-      await appWindow.hide();
+      await runtime.minimizeWindow();
     } catch (error) {
-      void reportError('Failed to hide window', error);
+      void reportError('Failed to minimize window', error);
     }
   }, [reportError]);
 
@@ -456,7 +516,7 @@ export default function App() {
     async (event: React.MouseEvent<HTMLDivElement>) => {
       if (event.button !== 0 || event.target !== event.currentTarget) return;
       try {
-        await appWindow.startDragging();
+        await runtime.startDragging();
       } catch (error) {
         void reportError('Failed to drag window', error);
       }
@@ -464,7 +524,6 @@ export default function App() {
     [reportError],
   );
 
-  // 底栏状态文案集中计算，避免 JSX 里堆太多条件分支。
   const statusLabel = initFailed
     ? '离线模式'
     : !hasLoadedState
@@ -476,7 +535,7 @@ export default function App() {
         : '系统稳定';
 
   const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
-  const switchDisplayOn = hasLoadedState && device.connected && device.switchOn;
+  const ambientLightDisplayOn = hasLoadedState && device.connected && device.ambientLightOn;
   const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;
   const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;
   const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
@@ -570,9 +629,9 @@ export default function App() {
       <div className="relative flex-1 flex flex-col overflow-hidden">
         <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/55 to-transparent pointer-events-none" />
 
-        <div className="relative flex-1 flex items-center justify-around px-12 py-4 overflow-visible">
+        <div className="relative flex-1 flex items-center justify-between gap-8 px-8 py-4 overflow-visible">
           <div className="relative flex items-center justify-center w-[360px] h-[360px]">
-            <div className="absolute w-[320px] h-[320px] border border-dashed border-cyan-500/18 rounded-full opacity-80" />
+            <div className="absolute w-[310px] h-[310px] border border-dashed border-cyan-500/18 rounded-full opacity-80" />
 
             <motion.div
               className="absolute w-[280px] h-[280px] border border-cyan-400/18 rounded-full border-t-transparent border-b-transparent transform-gpu will-change-transform"
@@ -581,12 +640,12 @@ export default function App() {
               style={{ transform: 'translateZ(0)' }}
             />
 
-            <div className="absolute w-[240px] h-[240px] border-2 border-cyan-500/8 rounded-full shadow-[inset_0_0_14px_rgba(6,182,212,0.05)]" />
+            <div className="absolute w-[250px] h-[250px] border-2 border-cyan-500/8 rounded-full shadow-[inset_0_0_14px_rgba(6,182,212,0.05)]" />
 
             <div className="relative z-10 flex flex-col items-center justify-center h-full w-full">
               <div className="absolute top-4 flex flex-col items-center gap-1">
                 <span className="text-[11px] font-black tracking-[0.45em] text-white uppercase">
-                  空调控制系统
+                  空调系统
                 </span>
 
                 <div className="flex gap-3 mt-1.5">
@@ -597,7 +656,6 @@ export default function App() {
                         : 'border-white/6 bg-white/[0.02]'
                     }`}
                   >
-                    <div className="absolute inset-0 circuit-pattern opacity-10 pointer-events-none" />
                     <Snowflake size={12} className={coolingModeActive ? 'text-cyan-100' : 'text-white/25'} />
                     <span
                       className={`text-[10px] font-black tracking-[0.18em] z-10 transition-colors duration-300 ${
@@ -625,7 +683,6 @@ export default function App() {
                     </span>
                   </div>
                 </div>
-
               </div>
 
               <TempCore
@@ -642,16 +699,16 @@ export default function App() {
             </div>
           </div>
 
-          <div className="w-64 flex flex-col py-2">
-            <div className="flex flex-col flex-1 justify-center gap-8">
-              <div className="flex items-center gap-3 px-1 mb-2">
-                <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_6px_white,0_0_12px_rgba(255,255,255,0.2)]" />
-                <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
-                  操作开关
-                </span>
-              </div>
+          <div className="w-[248px] flex flex-col py-2">
+            <div className="flex flex-col gap-8">
+              <div className="flex flex-col gap-5">
+                <div className="flex items-center gap-3 px-1 mb-2">
+                  <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_6px_white,0_0_12px_rgba(255,255,255,0.2)]" />
+                  <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
+                    空调控制
+                  </span>
+                </div>
 
-              <div className="space-y-5">
                 <TechToggle
                   active={acDisplayOn}
                   onClick={toggleAC}
@@ -666,28 +723,34 @@ export default function App() {
                     />
                   }
                 />
-
-                <TechToggle
-                  active={switchDisplayOn}
-                  onClick={toggleSwitch}
-                  disabled={!hasLoadedState || syncingAction || !device.connected || !device.switchAvailable}
-                  label="环境氛围照明"
-                  subLabel={switchDisplayOn ? '强光已开启' : '已关闭'}
-                  icon={
-                    <Lightbulb
-                      size={24}
-                      className={switchDisplayOn ? 'text-yellow-100 opacity-100' : 'text-white/70'}
-                      style={
-                        switchDisplayOn
-                          ? {
-                              filter: 'drop-shadow(0 0 10px rgba(255,240,180,0.9)) drop-shadow(0 0 18px rgba(255,220,120,0.7))',
-                            }
-                          : undefined
-                      }
-                    />
-                  }
-                />
               </div>
+
+              {hasLoadedState && lightingCards.length > 0 && (
+                <div className="flex flex-col gap-6">
+                  <div className="flex items-center gap-3 px-1 mb-2">
+                    <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_6px_white,0_0_12px_rgba(255,255,255,0.2)]" />
+                    <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
+                      照明控制
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col gap-3">
+                    {/* 首个配置灯位始终占据核心位置（全宽） */}
+                    {renderLightingToggle(lightingCards[0])}
+
+                    {/* 2个灯时的布局：垂直堆叠 */}
+                    {lightingCards.length === 2 && renderLightingToggle(lightingCards[1])}
+
+                    {/* 3个灯时的布局：非对称网格 */}
+                    {lightingCards.length === 3 && (
+                      <div className="grid grid-cols-2 gap-3">
+                        {renderLightingToggle(lightingCards[1], true)}
+                        {renderLightingToggle(lightingCards[2], true)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -695,21 +758,15 @@ export default function App() {
         <div className="relative px-6 py-4 bg-black/20 text-[10px] flex justify-between items-center tracking-[0.2em] font-black border-t border-white/10 text-white/50 antialiased overflow-hidden">
           <StatusTicker />
 
-          <div className="flex items-center gap-5 relative z-10">
-            <span className="text-white/80">
-              当前时间: <ClockText />
-            </span>
-            <span className="text-white/30">|</span>
-            <div className="flex items-center gap-2">
-              <div
-                className={`w-1.5 h-1.5 rounded-full ${
-                  device.connected
-                    ? 'bg-cyan-300 opacity-90 shadow-[0_0_6px_rgba(103,232,249,0.5)]'
-                    : 'bg-rose-300'
-                }`}
-              />
-              <span className="text-white/80 uppercase">{statusLabel}</span>
-            </div>
+          <div className="flex items-center gap-2 relative z-10">
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${
+                device.connected
+                  ? 'bg-cyan-300 opacity-90 shadow-[0_0_6px_rgba(103,232,249,0.5)]'
+                  : 'bg-rose-300'
+              }`}
+            />
+            <span className="text-white/80 uppercase">{statusLabel}</span>
           </div>
         </div>
       </div>

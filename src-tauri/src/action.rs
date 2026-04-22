@@ -8,7 +8,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::{apply_action, ActionArgs, ActionKind};
+    use super::{apply_action, ActionArgs, ActionKind, ActionTarget};
 
     fn sample_snapshot(ac_on: bool, switch_on: bool) -> DeviceSnapshot {
         DeviceSnapshot {
@@ -24,8 +24,21 @@ mod tests {
                 is_available: true,
             },
             switch_on,
+            main_light: SwitchState {
+                is_on: false,
+                is_available: true,
+            },
+            door_sign_light: SwitchState {
+                is_on: false,
+                is_available: true,
+            },
+            main_light_on: false,
+            door_sign_light_on: false,
             ac_available: true,
             switch_available: true,
+            main_light_available: true,
+            door_sign_light_available: true,
+            light_count: 3,
             connected: true,
         }
     }
@@ -81,7 +94,8 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: None,
+                ambient_light: None,
+                ..Default::default()
             }),
         };
 
@@ -90,6 +104,7 @@ mod tests {
             sample_snapshot(false, false),
             ActionArgs {
                 action: ActionKind::AcToggle,
+                target: None,
                 value: None,
             },
         )
@@ -153,7 +168,8 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: None,
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -162,6 +178,7 @@ mod tests {
             sample_snapshot(false, false),
             ActionArgs {
                 action: ActionKind::SwitchToggle,
+                target: Some(ActionTarget::AmbientLight),
                 value: None,
             },
         )
@@ -172,6 +189,66 @@ mod tests {
 
         assert!(outcome.error.is_none());
         assert!(outcome.snapshot.switch_on);
+    }
+
+    #[tokio::test]
+    async fn switch_toggle_routes_to_the_requested_light_target() {
+        disable_proxy_env();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let mut seen = 0usize;
+            loop {
+                let accepted =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                        .await;
+
+                let Ok(Ok((socket, _))) = accepted else {
+                    break;
+                };
+
+                match seen {
+                    0 => respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await,
+                    1 => {
+                        respond_with_json(socket, r#"{"state":"on","attributes":{}}"#).await
+                    }
+                    _ => respond_with_json(socket, r#"{"state":"on","attributes":{}}"#).await,
+                }
+
+                seen += 1;
+            }
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: None,
+                ambient_light: None,
+                main_light: Some("light.ceiling".into()),
+                ..Default::default()
+            }),
+        };
+
+        let outcome = apply_action(
+            &config,
+            sample_snapshot(false, false),
+            ActionArgs {
+                action: ActionKind::SwitchToggle,
+                target: Some(ActionTarget::MainLight),
+                value: None,
+            },
+        )
+        .await
+        .expect("action should refresh state");
+
+        server.await.expect("server task");
+
+        assert!(outcome.error.is_none());
+        assert!(outcome.snapshot.main_light_on);
+        assert!(!outcome.snapshot.switch_on);
     }
 
     #[tokio::test]
@@ -205,7 +282,8 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: None,
+                ambient_light: None,
+                ..Default::default()
             }),
         };
 
@@ -214,6 +292,7 @@ mod tests {
             sample_snapshot(true, false),
             ActionArgs {
                 action: ActionKind::AcSetTemp,
+                target: None,
                 value: Some(26),
             },
         )
@@ -257,7 +336,8 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: None,
+                ambient_light: None,
+                ..Default::default()
             }),
         };
 
@@ -266,6 +346,7 @@ mod tests {
             sample_snapshot(true, false),
             ActionArgs {
                 action: ActionKind::AcSetTemp,
+                target: None,
                 value: Some(31),
             },
         )
@@ -297,7 +378,8 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -306,6 +388,7 @@ mod tests {
             sample_snapshot(false, false),
             ActionArgs {
                 action: ActionKind::StartupOnline,
+                target: None,
                 value: None,
             },
         )
@@ -346,7 +429,8 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -358,6 +442,7 @@ mod tests {
             snapshot,
             ActionArgs {
                 action: ActionKind::StartupOnline,
+                target: None,
                 value: None,
             },
         )
@@ -377,7 +462,8 @@ mod tests {
             pc_entity_id: None,
             entity_id: Some(DeviceIds {
                 ac: None,
-                switch: None,
+                ambient_light: None,
+                ..Default::default()
             }),
         };
 
@@ -389,6 +475,7 @@ mod tests {
             snapshot,
             ActionArgs {
                 action: ActionKind::StartupOnline,
+                target: None,
                 value: None,
             },
         )
@@ -403,7 +490,9 @@ mod tests {
         let mut snapshot = sample_snapshot(false, false);
 
         snapshot.sync_ac_state(true, true);
-        snapshot.sync_switch_state(true, false);
+        snapshot.sync_ambient_light_state(true, false);
+        snapshot.sync_main_light_state(true, true);
+        snapshot.sync_door_sign_light_state(false, false);
 
         assert!(snapshot.ac_available);
         assert!(snapshot.ac.is_available);
@@ -412,13 +501,32 @@ mod tests {
         assert!(snapshot.switch.is_available);
         assert!(!snapshot.switch_on);
         assert!(!snapshot.switch.is_on);
+        assert!(snapshot.main_light_available);
+        assert!(snapshot.main_light.is_available);
+        assert!(snapshot.main_light_on);
+        assert!(snapshot.main_light.is_on);
+        assert!(!snapshot.door_sign_light_available);
+        assert!(!snapshot.door_sign_light.is_available);
     }
 
     #[test]
-    fn action_kind_accepts_switch_toggle_payload() {
-        let action: ActionKind = serde_json::from_str(r#""switch_toggle""#).expect("action");
+    fn action_kind_accepts_switch_toggle_payload_only() {
+        let switch_action: ActionKind = serde_json::from_str(r#""switch_toggle""#).expect("action");
 
-        assert_eq!(action, ActionKind::SwitchToggle);
+        assert_eq!(switch_action, ActionKind::SwitchToggle);
+        assert!(serde_json::from_str::<ActionKind>(r#""main_light_toggle""#).is_err());
+        assert!(serde_json::from_str::<ActionKind>(r#""door_sign_light_toggle""#).is_err());
+    }
+
+    #[test]
+    fn action_args_parse_switch_toggle_target() {
+        let args: ActionArgs = serde_json::from_str(
+            r#"{"action":"switch_toggle","target":"mainLight"}"#,
+        )
+        .expect("args");
+
+        assert_eq!(args.action, ActionKind::SwitchToggle);
+        assert_eq!(args.target, Some(ActionTarget::MainLight));
     }
 }
 
@@ -429,8 +537,8 @@ use std::time::Duration;
 
 use crate::ha_client::{
     climate_set_temperature_request, climate_temperature_targets, climate_turn_off_request,
-    climate_turn_on_request, fetch_ha_entity_state, switch_turn_off_request, switch_turn_on_request,
-    send_ha_request, send_ha_request_with_timeout,
+    climate_turn_on_request, entity_turn_off_request, entity_turn_on_request,
+    fetch_ha_entity_state, send_ha_request, send_ha_request_with_timeout,
 };
 use crate::models::{AppConfig, DeviceSnapshot, HaRequest};
 use crate::snapshot::snapshot_from_loaded_states;
@@ -438,7 +546,16 @@ use crate::snapshot::snapshot_from_loaded_states;
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ActionArgs {
     pub(crate) action: ActionKind,
+    pub(crate) target: Option<ActionTarget>,
     pub(crate) value: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ActionTarget {
+    AmbientLight,
+    MainLight,
+    DoorSignLight,
 }
 
 #[derive(Debug)]
@@ -450,7 +567,7 @@ pub(crate) struct ActionApplyOutcome {
 #[derive(Debug, Clone)]
 enum HaAction {
     ToggleAc { on: bool },
-    ToggleSwitch { on: bool },
+    ToggleEntity { entity_id: String, on: bool },
 }
 
 impl HaAction {
@@ -463,11 +580,11 @@ impl HaAction {
                     climate_turn_off_request(config)
                 }
             }
-            Self::ToggleSwitch { on } => {
+            Self::ToggleEntity { entity_id, on } => {
                 if *on {
-                    switch_turn_on_request(config)
+                    entity_turn_on_request(config, entity_id)
                 } else {
-                    switch_turn_off_request(config)
+                    entity_turn_off_request(config, entity_id)
                 }
             }
         }
@@ -559,22 +676,44 @@ async fn send_ha_action(config: &AppConfig, action: HaAction) -> Result<()> {
     send_ha_request(config, action.into_request(config)?).await
 }
 
+async fn send_entity_toggle_request(config: &AppConfig, entity_id: &str, on: bool) -> Result<()> {
+    send_ha_action(
+        config,
+        HaAction::ToggleEntity {
+            entity_id: entity_id.to_string(),
+            on,
+        },
+    )
+    .await
+}
+
+fn configured_light_entity_ids(config: &AppConfig) -> [Option<&str>; 3] {
+    [
+        config.ambient_light_entity_id(),
+        config.main_light_entity_id(),
+        config.door_sign_light_entity_id(),
+    ]
+}
+
 async fn send_ha_notification(config: &AppConfig, state: bool) -> Result<()> {
     let request = build_notification_request(config, state)?;
     send_ha_request_with_timeout(config, request, notification_timeout(state)).await
 }
 
-fn startup_online_targets(config: &AppConfig) -> (bool, bool, bool) {
+fn startup_online_targets(config: &AppConfig) -> (bool, bool, bool, bool, bool) {
     (
         config.pc_entity_id().is_some(),
         config.ac_entity_id().is_some(),
-        config.switch_entity_id().is_some(),
+        config.ambient_light_entity_id().is_some(),
+        config.main_light_entity_id().is_some(),
+        config.door_sign_light_entity_id().is_some(),
     )
 }
 
 pub(crate) async fn send_startup_online(config: &AppConfig) -> Result<()> {
     let mut first_err: Option<anyhow::Error> = None;
-    let (send_pc, send_ac, send_switch) = startup_online_targets(config);
+    let (send_pc, send_ac, send_ambient_light, send_main_light, send_door_sign_light) =
+        startup_online_targets(config);
 
     if send_pc {
         if let Err(err) = send_ha_notification(config, true).await {
@@ -588,9 +727,11 @@ pub(crate) async fn send_startup_online(config: &AppConfig) -> Result<()> {
         }
     }
 
-    if send_switch {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleSwitch { on: true }).await {
-            first_err.get_or_insert(err);
+    if send_ambient_light || send_main_light || send_door_sign_light {
+        for entity_id in configured_light_entity_ids(config).into_iter().flatten() {
+            if let Err(err) = send_entity_toggle_request(config, entity_id, true).await {
+                first_err.get_or_insert(err);
+            }
         }
     }
 
@@ -614,8 +755,8 @@ pub(crate) async fn send_shutdown_signal(config: &AppConfig) -> Result<()> {
         }
     }
 
-    if config.switch_entity_id().is_some() {
-        if let Err(err) = send_ha_action(config, HaAction::ToggleSwitch { on: false }).await {
+    for entity_id in configured_light_entity_ids(config).into_iter().flatten() {
+        if let Err(err) = send_entity_toggle_request(config, entity_id, false).await {
             first_err.get_or_insert(err);
         }
     }
@@ -631,7 +772,15 @@ pub(crate) async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceS
         Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
         None => None,
     };
-    let switch_state = match config.switch_entity_id() {
+    let ambient_light_state = match config.ambient_light_entity_id() {
+        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
+        None => None,
+    };
+    let main_light_state = match config.main_light_entity_id() {
+        Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
+        None => None,
+    };
+    let door_sign_light_state = match config.door_sign_light_entity_id() {
         Some(entity_id) => Some(fetch_ha_entity_state(config, entity_id).await?),
         None => None,
     };
@@ -641,9 +790,12 @@ pub(crate) async fn fetch_current_snapshot(config: &AppConfig) -> Result<DeviceS
     };
 
     Ok(snapshot_from_loaded_states(
+        config.light_count(),
         pc_state.as_ref(),
         ac_state.as_ref(),
-        switch_state.as_ref(),
+        ambient_light_state.as_ref(),
+        main_light_state.as_ref(),
+        door_sign_light_state.as_ref(),
     ))
 }
 
@@ -726,42 +878,63 @@ async fn apply_action_with_delays(
             .await);
         }
         ActionKind::SwitchToggle => {
-            if config.switch_entity_id().is_none() {
-                return Ok(ActionApplyOutcome {
-                    snapshot,
-                    error: None,
-                });
+            let target = args.target.ok_or_else(|| anyhow!("missing light target"))?;
+            let entity_id = match target {
+                ActionTarget::AmbientLight => config.ambient_light_entity_id(),
+                ActionTarget::MainLight => config.main_light_entity_id(),
+                ActionTarget::DoorSignLight => config.door_sign_light_entity_id(),
             }
+            .ok_or_else(|| anyhow!("light target is not configured"))?;
             let original = snapshot.clone();
-            let next = !snapshot.switch_on;
-            let result = send_ha_request(
-                config,
-                HaAction::ToggleSwitch { on: next }.into_request(config)?,
-            )
-            .await;
-            snapshot.sync_switch_state(snapshot.switch_available, next);
+            let next = match target {
+                ActionTarget::AmbientLight => !snapshot.switch_on,
+                ActionTarget::MainLight => !snapshot.main_light_on,
+                ActionTarget::DoorSignLight => !snapshot.door_sign_light_on,
+            };
+            let result = send_entity_toggle_request(config, entity_id, next).await;
+            match target {
+                ActionTarget::AmbientLight => snapshot.sync_ambient_light_state(snapshot.switch_available, next),
+                ActionTarget::MainLight => snapshot.sync_main_light_state(snapshot.main_light_available, next),
+                ActionTarget::DoorSignLight => {
+                    snapshot.sync_door_sign_light_state(snapshot.door_sign_light_available, next)
+                }
+            }
             return Ok(confirm_action_snapshot_with_delays(
                 config,
                 &original,
                 result.err().map(|err| err.to_string()),
-                move |current| current.switch_on == next,
+                move |current| match target {
+                    ActionTarget::AmbientLight => current.switch_on == next,
+                    ActionTarget::MainLight => current.main_light_on == next,
+                    ActionTarget::DoorSignLight => current.door_sign_light_on == next,
+                },
                 initial_delay,
                 retry_count,
                 retry_interval,
-                "环境氛围照明尚未进入预期开关状态，继续等待刷新。",
+                "照明尚未进入预期开关状态，继续等待刷新。",
             )
             .await);
         }
         ActionKind::StartupOnline => {
             send_startup_online(config).await?;
+            snapshot.light_count = config.light_count();
             snapshot.connected = config.pc_entity_id().is_some()
                 || config.ac_entity_id().is_some()
-                || config.switch_entity_id().is_some();
+                || config.ambient_light_entity_id().is_some()
+                || config.main_light_entity_id().is_some()
+                || config.door_sign_light_entity_id().is_some();
             let ac_available = config.ac_entity_id().is_some();
-            let switch_available = config.switch_entity_id().is_some();
+            let ambient_light_available = config.ambient_light_entity_id().is_some();
+            let main_light_available = config.main_light_entity_id().is_some();
+            let door_sign_light_available = config.door_sign_light_entity_id().is_some();
 
             snapshot.sync_ac_state(ac_available, ac_available);
-            snapshot.sync_switch_state(switch_available, switch_available);
+            snapshot.sync_ambient_light_state(ambient_light_available, ambient_light_available);
+            snapshot.sync_main_light_state(main_light_available, main_light_available);
+            snapshot.sync_door_sign_light_state(
+                door_sign_light_available,
+                door_sign_light_available,
+            );
         }
         ActionKind::ShutdownSignal => {
             send_shutdown_signal(config).await?;

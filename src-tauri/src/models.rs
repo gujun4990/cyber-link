@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceIds {
     #[serde(default)]
     pub ac: Option<String>,
     #[serde(default)]
-    pub switch: Option<String>,
+    pub ambient_light: Option<String>,
+    #[serde(default)]
+    pub main_light: Option<String>,
+    #[serde(default)]
+    pub door_sign_light: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,8 +28,36 @@ impl AppConfig {
         self.entity_id.as_ref().and_then(|ids| ids.ac.as_deref())
     }
 
-    pub(crate) fn switch_entity_id(&self) -> Option<&str> {
-        self.entity_id.as_ref().and_then(|ids| ids.switch.as_deref())
+    pub(crate) fn ambient_light_entity_id(&self) -> Option<&str> {
+        self.entity_id
+            .as_ref()
+            .and_then(|ids| ids.ambient_light.as_deref())
+    }
+
+    pub(crate) fn main_light_entity_id(&self) -> Option<&str> {
+        self.entity_id
+            .as_ref()
+            .and_then(|ids| ids.main_light.as_deref())
+    }
+
+    pub(crate) fn door_sign_light_entity_id(&self) -> Option<&str> {
+        self.entity_id
+            .as_ref()
+            .and_then(|ids| ids.door_sign_light.as_deref())
+    }
+
+    pub(crate) fn light_count(&self) -> u8 {
+        let mut count = 0;
+        if self.ambient_light_entity_id().is_some() {
+            count += 1;
+        }
+        if self.main_light_entity_id().is_some() {
+            count += 1;
+        }
+        if self.door_sign_light_entity_id().is_some() {
+            count += 1;
+        }
+        count
     }
 
     pub(crate) fn pc_entity_id(&self) -> Option<&str> {
@@ -38,18 +71,38 @@ impl DeviceSnapshot {
         self.ac_available = available;
     }
 
-    pub(crate) fn set_switch_available(&mut self, available: bool) {
+    pub(crate) fn set_ambient_light_available(&mut self, available: bool) {
         self.switch.is_available = available;
         self.switch_available = available;
+    }
+
+    pub(crate) fn set_main_light_available(&mut self, available: bool) {
+        self.main_light.is_available = available;
+        self.main_light_available = available;
+    }
+
+    pub(crate) fn set_door_sign_light_available(&mut self, available: bool) {
+        self.door_sign_light.is_available = available;
+        self.door_sign_light_available = available;
     }
 
     pub(crate) fn set_ac_on(&mut self, is_on: bool) {
         self.ac.is_on = is_on;
     }
 
-    pub(crate) fn set_switch_on(&mut self, is_on: bool) {
+    pub(crate) fn set_ambient_light_on(&mut self, is_on: bool) {
         self.switch.is_on = is_on;
         self.switch_on = is_on;
+    }
+
+    pub(crate) fn set_main_light_on(&mut self, is_on: bool) {
+        self.main_light.is_on = is_on;
+        self.main_light_on = is_on;
+    }
+
+    pub(crate) fn set_door_sign_light_on(&mut self, is_on: bool) {
+        self.door_sign_light.is_on = is_on;
+        self.door_sign_light_on = is_on;
     }
 
     pub(crate) fn sync_ac_state(&mut self, is_available: bool, is_on: bool) {
@@ -58,40 +111,68 @@ impl DeviceSnapshot {
         self.ac.is_on = is_on;
     }
 
-    pub(crate) fn sync_switch_state(&mut self, is_available: bool, is_on: bool) {
+    pub(crate) fn sync_ambient_light_state(&mut self, is_available: bool, is_on: bool) {
         self.switch.is_available = is_available;
         self.switch_available = is_available;
         self.switch.is_on = is_on;
         self.switch_on = is_on;
     }
+
+    pub(crate) fn sync_main_light_state(&mut self, is_available: bool, is_on: bool) {
+        self.main_light.is_available = is_available;
+        self.main_light_available = is_available;
+        self.main_light.is_on = is_on;
+        self.main_light_on = is_on;
+    }
+
+    pub(crate) fn sync_door_sign_light_state(&mut self, is_available: bool, is_on: bool) {
+        self.door_sign_light.is_available = is_available;
+        self.door_sign_light_available = is_available;
+        self.door_sign_light.is_on = is_on;
+        self.door_sign_light_on = is_on;
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ACState {
     pub is_on: bool,
     pub is_available: bool,
     pub temp: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SwitchState {
     pub is_on: bool,
     pub is_available: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceSnapshot {
     pub room: String,
     #[serde(rename = "pcId")]
     pub pc_id: String,
     pub ac: ACState,
     pub switch: SwitchState,
+    #[serde(rename = "mainLight")]
+    pub main_light: SwitchState,
+    #[serde(rename = "doorSignLight")]
+    pub door_sign_light: SwitchState,
     #[serde(rename = "switchOn")]
     pub switch_on: bool,
+    #[serde(rename = "mainLightOn")]
+    pub main_light_on: bool,
+    #[serde(rename = "doorSignLightOn")]
+    pub door_sign_light_on: bool,
     #[serde(rename = "acAvailable")]
     pub ac_available: bool,
     #[serde(rename = "switchAvailable")]
     pub switch_available: bool,
+    #[serde(rename = "mainLightAvailable")]
+    pub main_light_available: bool,
+    #[serde(rename = "doorSignLightAvailable")]
+    pub door_sign_light_available: bool,
+    #[serde(rename = "lightCount")]
+    pub light_count: u8,
     pub connected: bool,
 }
 
@@ -128,16 +209,29 @@ mod tests {
                 is_on: false,
                 is_available: false,
             },
+            main_light: SwitchState {
+                is_on: false,
+                is_available: false,
+            },
+            door_sign_light: SwitchState {
+                is_on: false,
+                is_available: false,
+            },
             switch_on: false,
+            main_light_on: false,
+            door_sign_light_on: false,
             ac_available: false,
             switch_available: false,
+            main_light_available: false,
+            door_sign_light_available: false,
+            light_count: 0,
             connected: true,
         };
 
         snapshot.set_ac_available(true);
-        snapshot.set_switch_available(true);
+        snapshot.set_ambient_light_available(true);
         snapshot.set_ac_on(true);
-        snapshot.set_switch_on(true);
+        snapshot.set_ambient_light_on(true);
 
         assert!(snapshot.ac.is_available);
         assert!(snapshot.ac_available);
@@ -149,17 +243,40 @@ mod tests {
     }
 
     #[test]
-    fn app_config_entity_ids_can_store_switch_entities() {
-        let config = AppConfig {
-            ha_url: "https://ha.example.local".into(),
-            token: "secret".into(),
-            pc_entity_id: Some("input_boolean.pc_05_online".into()),
-            entity_id: Some(crate::models::DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
-            }),
-        };
+    fn app_config_entity_ids_use_ambient_light_key() {
+        let config: AppConfig = serde_json::from_str(
+            r#"{
+                "ha_url": "https://ha.example.local",
+                "token": "secret",
+                "pc_entity_id": "input_boolean.pc_05_online",
+                "entity_id": {
+                    "ac": "climate.office_ac",
+                    "ambient_light": "switch.office_light",
+                    "main_light": "light.ceiling",
+                    "door_sign_light": "switch.door_sign"
+                }
+            }"#,
+        )
+        .expect("config should parse");
 
-        assert_eq!(config.switch_entity_id(), Some("switch.office_light"));
+        assert_eq!(config.ambient_light_entity_id(), Some("switch.office_light"));
+        assert_eq!(config.main_light_entity_id(), Some("light.ceiling"));
+        assert_eq!(config.door_sign_light_entity_id(), Some("switch.door_sign"));
+        assert_eq!(config.light_count(), 3);
+    }
+
+    #[test]
+    fn app_config_entity_ids_reject_old_switch_key() {
+        let config = serde_json::from_str::<AppConfig>(
+            r#"{
+                "ha_url": "https://ha.example.local",
+                "token": "secret",
+                "entity_id": {
+                    "switch": "switch.office_light"
+                }
+            }"#,
+        );
+
+        assert!(config.is_err());
     }
 }

@@ -73,7 +73,9 @@
   "pc_entity_id": "input_boolean.your_pc_online",
   "entity_id": {
     "ac": "climate.your_ac_entity",
-    "switch": "switch.your_switch_entity"
+    "ambient_light": "switch.your_ambient_light_entity",
+    "main_light": "light.your_main_light_entity",
+    "door_sign_light": "switch.your_door_sign_light_entity"
   }
 }
 ```
@@ -84,17 +86,21 @@
 - `token`：长期访问令牌
 - `pc_entity_id`：表示本机在线/离线的 `input_boolean`，可省略
 - `entity_id.ac`：空调实体，可省略
-- `entity_id.switch`：控制项实体，可省略，填入完整 entity_id 即可
+- `entity_id.ambient_light`：氛围灯实体，可省略，填入完整 entity_id 即可
+- `entity_id.main_light`：主照明实体，可省略，填入完整 entity_id 即可
+- `entity_id.door_sign_light`：门牌灯实体，可省略，填入完整 entity_id 即可
 
 如果 `pc_entity_id` 未配置，应用不会发送本机在线/离线通知。
-如果 `entity_id.ac` 或 `entity_id.switch` 未配置，对应功能会在前端禁用，并且后端不会发送相关 Home Assistant 请求。
+如果 `entity_id.ac`、`entity_id.ambient_light`、`entity_id.main_light` 或 `entity_id.door_sign_light` 未配置，对应功能会在前端禁用，并且后端不会发送相关 Home Assistant 请求。
 `entity_id` 会按前缀自动推断 Home Assistant 域名，因此可填写 `light.*`、`switch.*` 等实体。
 
 ### Home Assistant 实体示例
 
 - `input_boolean.your_pc_online`
 - `climate.office_ac`
-- `switch.desk_switch`
+- `switch.desk_ambient_light`
+- `light.ceiling_light`
+- `switch.door_sign_light`
 
 ## 使用步骤
 

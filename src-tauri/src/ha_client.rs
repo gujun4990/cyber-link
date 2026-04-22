@@ -33,8 +33,8 @@ fn entity_id<'a>(config: &'a AppConfig, is_ac: bool) -> Result<&'a str> {
             .ok_or_else(|| anyhow!("AC entity is not configured"))?
     } else {
         config
-            .switch_entity_id()
-            .ok_or_else(|| anyhow!("switch entity is not configured"))?
+            .ambient_light_entity_id()
+            .ok_or_else(|| anyhow!("ambient light entity is not configured"))?
     };
 
     Ok(entity_id)
@@ -54,6 +54,14 @@ fn generic_request(config: &AppConfig, entity_id: &str, service: &str) -> Result
         url: format!("{}/api/services/{}/{}", base_url(config), domain, service),
         body: request_body(entity_id),
     })
+}
+
+pub(crate) fn entity_turn_on_request(config: &AppConfig, entity_id: &str) -> Result<HaRequest> {
+    generic_request(config, entity_id, "turn_on")
+}
+
+pub(crate) fn entity_turn_off_request(config: &AppConfig, entity_id: &str) -> Result<HaRequest> {
+    generic_request(config, entity_id, "turn_off")
 }
 
 fn climate_request(config: &AppConfig, service: &str) -> Result<HaRequest> {
@@ -167,7 +175,9 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(crate::models::DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                main_light: Some("light.ceiling".into()),
+                door_sign_light: Some("switch.door_sign".into()),
             }),
         }
     }

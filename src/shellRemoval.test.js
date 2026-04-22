@@ -39,8 +39,8 @@ test('App root renders the card as the only visible surface', () => {
 
   assert.equal(source.includes('flex min-h-screen items-center justify-center p-4 overflow-hidden'), false);
   assert.equal(source.includes('<div className="flex min-h-screen items-center justify-center p-4 overflow-hidden">'), false);
-  assert.equal(source.includes('w-64 flex flex-col py-2'), true);
-  assert.equal(source.includes('当前时间'), true);
+  assert.equal(source.includes('w-[248px] flex flex-col py-2'), true);
+  assert.equal(source.includes('当前时间'), false);
   assert.equal(source.includes('currentTime.toLocaleTimeString'), true);
 });
 
@@ -65,7 +65,7 @@ test('window size load failures are logged instead of silently ignored', () => {
 test('logs are written to the app log command', () => {
   const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 
-  assert.equal(appSource.includes("invoke('append_log_message', { message })"), true);
+  assert.equal(appSource.includes('runtime.appendLogMessage(message)'), true);
   assert.equal(appSource.includes("const consoleLogLevels = ['warn', 'error'] as const;"), true);
   assert.equal(appSource.includes("consoleLogLevels = ['log', 'info', 'warn', 'error']"), false);
   assert.equal(appSource.includes('new Date().toISOString()'), true);
@@ -78,21 +78,34 @@ test('windows binary is built without a console window', () => {
   assert.equal(mainSource.includes('#![cfg_attr(windows, windows_subsystem = "windows")]'), true);
 });
 
-test('startup renders both switches off until state is known', () => {
+test('startup renders lighting cards with the configured count', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 
   assert.equal(source.includes('const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
-  assert.equal(source.includes('const switchDisplayOn = hasLoadedState && device.connected && device.switchOn;'), true);
+  assert.equal(source.includes('ambientLightAvailable: device.ambientLightAvailable,'), true);
+  assert.equal(source.includes('ambientLightOn: device.ambientLightOn,'), true);
+  assert.equal(source.includes('buildLightingCards({'), true);
   assert.equal(source.includes('const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;'), true);
   assert.equal(source.includes('const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;'), true);
   assert.equal(source.includes('const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;'), true);
   assert.equal(source.includes('const [syncingAction, setSyncingAction] = useState(false);'), true);
-  assert.equal(source.includes('syncingAction || !device.connected || !device.acAvailable'), true);
-  assert.equal(source.includes('disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}'), true);
-  assert.equal(source.includes('active={acDisplayOn}'), true);
-  assert.equal(source.includes('active={switchDisplayOn}'), true);
-  assert.equal(source.includes("subLabel={acDisplayOn ? '核心运行中' : '已关闭'}"), true);
-  assert.equal(source.includes("subLabel={switchDisplayOn ? '强光已开启' : '已关闭'}"), true);
+  assert.equal(source.includes('hasLoadedState && lightingCards.length > 0'), true);
+  assert.equal(source.includes('renderLightingToggle(lightingCards[0])'), true);
+  assert.equal(source.includes('lightingCards.length === 2'), true);
+  assert.equal(source.includes('lightingCards.length === 3'), true);
+  assert.equal(source.includes('lightingCount'), false);
+  assert.equal(source.includes('照明控制'), true);
+  assert.equal(source.includes('grid grid-cols-2 gap-3'), true);
+  assert.equal(source.includes('col-span-2'), false);
+  assert.equal(source.includes('未配置灯光'), false);
+});
+
+test('compact lighting cards do not truncate their labels', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /isCompact\s*\?\s*'text-\[10px\] tracking-\[0\.04em\] whitespace-nowrap'/);
+  assert.match(source, /isCompact\s*\?\s*'text-\[8px\] whitespace-nowrap'\s*:\s*'text-\[10px\] truncate'/);
+  assert.equal(source.includes('className={`font-black antialiased transition-colors duration-300 truncate ${'), false);
 });
 
 test('tauri window is configured as a single transparent surface', () => {

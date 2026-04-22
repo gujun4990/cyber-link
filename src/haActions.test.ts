@@ -15,4 +15,6 @@ test('builds startup and shutdown payloads', () => {
 
 test('uses the switch toggle action payload string', () => {
   assert.equal(ACTIONS.switchToggle, 'switch_toggle');
+  assert.equal('mainLightToggle' in ACTIONS, false);
+  assert.equal('doorSignLightToggle' in ACTIONS, false);
 });

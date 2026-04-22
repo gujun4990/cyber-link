@@ -14,7 +14,7 @@ use tauri::{AppHandle, Manager, State};
 
 #[cfg(windows)]
 use crate::{
-    action::{self, ActionArgs, ActionKind},
+    action::{self, ActionArgs, ActionKind, ActionTarget},
     append_log_line, ensure_user_app_dir, load_config, log_line, refresh_snapshot_with_retry,
     retry_startup_task, startup_mode_from_args, tolerate_autostart_error, SharedState, StartupMode,
 };
@@ -186,6 +186,7 @@ pub async fn handle_ha_action(
     app: AppHandle,
     state: State<'_, SharedState>,
     action: ActionKind,
+    target: Option<ActionTarget>,
     value: Option<i32>,
 ) -> Result<DeviceSnapshot, String> {
     let config = load_config().map_err(|e| e.to_string())?;
@@ -193,7 +194,7 @@ pub async fn handle_ha_action(
         let state = state.0.lock().map_err(|e| e.to_string())?;
         state.clone()
     };
-    let outcome = action::apply_action(&config, snapshot, ActionArgs { action, value })
+    let outcome = action::apply_action(&config, snapshot, ActionArgs { action, target, value })
         .await
         .map_err(|e| e.to_string())?;
     {

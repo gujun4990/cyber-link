@@ -30,7 +30,7 @@ Home Assistant 一旦检测到实体状态变化，就主动推送 `state_change
 每个客户端配置自己的实体绑定，例如：
 
 - `ac_entity_id = climate.ac1`
-- `entity_id.switch = light.room1_light` 或 `switch.room1_light`
+- `entity_id.ambient_light = light.room1_ambient_light`
 - `pc_entity_id = input_boolean.room1_pc_online`（可省略）
 
 收到 HA 推送后，客户端先检查 `entity_id`：
@@ -77,7 +77,7 @@ Home Assistant 一旦检测到实体状态变化，就主动推送 `state_change
 - 启动时只启动一个常驻 WebSocket 监听任务
 - 监听任务断线后自动重连
 - 收到消息时先解析 `entity_id`
-- 只对绑定的 `ac` / `switch` / `pc` 做刷新
+- 只对绑定的 `ac` / `ambient_light` / `main_light` / `door_sign_light` / `pc` 做刷新
 - 刷新后继续沿用现有的 `state-refresh` 事件通知前端
 
 ## 适用范围

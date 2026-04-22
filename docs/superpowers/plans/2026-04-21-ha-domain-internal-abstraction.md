@@ -26,7 +26,7 @@ fn generic_request_builds_url_from_domain() {
         pc_entity_id: Some("input_boolean.pc_05_online".into()),
         entity_id: Some(DeviceIds {
             ac: Some("climate.office_ac".into()),
-            switch: Some("switch.office_light".into()),
+            ambient_light: Some("switch.office_light".into()),
         }),
     };
 

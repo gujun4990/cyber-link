@@ -582,7 +582,7 @@ mod windows_app {
                     let _ = event.window().hide();
                 }
             })
-            .manage(SharedState(Mutex::new(initial_snapshot())))
+            .manage(SharedState(Mutex::new(initial_snapshot(0))))
             .setup(move |app| {
                 if let Some(window) = app.get_window("main") {
                     if let Err(err) = install_shutdown_hook(&window) {
@@ -762,7 +762,7 @@ mod tests {
             "pc_entity_id": "input_boolean.pc_05_online",
             "entity_id": {
                 "ac": "climate.office_ac",
-                "switch": "switch.office_light"
+                "ambient_light": "switch.office_light"
             }
         }"#;
 
@@ -778,7 +778,8 @@ mod tests {
             config.entity_id,
             Some(DeviceIds {
                 ac: Some("climate.office_ac".to_string()),
-                switch: Some("switch.office_light".to_string()),
+                ambient_light: Some("switch.office_light".to_string()),
+                ..Default::default()
             })
         );
     }
@@ -799,7 +800,7 @@ mod tests {
         );
         assert_eq!(config.entity_id, None);
         assert_eq!(config.ac_entity_id(), None);
-        assert_eq!(config.switch_entity_id(), None);
+        assert_eq!(config.ambient_light_entity_id(), None);
     }
 
     #[test]
@@ -809,7 +810,7 @@ mod tests {
             "token": "secret",
             "entity_id": {
                 "ac": "climate.office_ac",
-                "switch": "switch.office_light"
+                "ambient_light": "switch.office_light"
             }
         }"#;
 
@@ -821,6 +822,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_config_with_ambient_and_two_extra_lights() {
+        let json = r#"{
+            "ha_url": "https://ha.example.local",
+            "token": "secret",
+            "entity_id": {
+                "ac": "climate.office_ac",
+                "ambient_light": "light.ambient",
+                "main_light": "switch.main",
+                "door_sign_light": "switch.door"
+            }
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).expect("config should parse");
+
+        assert_eq!(config.ambient_light_entity_id(), Some("light.ambient"));
+        assert_eq!(config.main_light_entity_id(), Some("switch.main"));
+        assert_eq!(config.door_sign_light_entity_id(), Some("switch.door"));
+        assert_eq!(config.light_count(), 3);
+    }
+
+    #[test]
     fn builds_climate_turn_on_request_in_ha_client() {
         let config = AppConfig {
             ha_url: "https://ha.example.local".into(),
@@ -828,7 +850,8 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -852,7 +875,8 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -876,7 +900,8 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -900,7 +925,8 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -980,7 +1006,8 @@ mod tests {
             pc_entity_id: Some("input_boolean.pc_05_online".into()),
             entity_id: Some(DeviceIds {
                 ac: Some("climate.office_ac".into()),
-                switch: Some("switch.office_light".into()),
+                ambient_light: Some("switch.office_light".into()),
+                ..Default::default()
             }),
         };
 
@@ -1581,7 +1608,7 @@ mod tests {
 
     #[tokio::test]
     async fn tray_toggle_does_not_mutate_on_failure() {
-        let snapshot = initial_snapshot();
+        let snapshot = initial_snapshot(0);
         let result: anyhow::Result<DeviceSnapshot> = apply_tray_toggle(
             Err::<(), anyhow::Error>(anyhow!("ha failed")),
             snapshot.clone(),
@@ -1597,7 +1624,7 @@ mod tests {
 
     #[tokio::test]
     async fn tray_toggle_mutates_after_success() {
-        let snapshot = initial_snapshot();
+        let snapshot = initial_snapshot(0);
         let next = apply_tray_toggle(Ok::<(), anyhow::Error>(()), snapshot, |s| {
             s.ac.is_on = false;
         })
