@@ -266,6 +266,12 @@ fn query_end_session_result_value() -> isize {
     1
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+fn shutdown_notification_response(send: impl FnOnce()) -> isize {
+    send();
+    query_end_session_result_value()
+}
+
 fn handle_windows_message_kind(msg: u32) -> bool {
     msg == WM_QUERYENDSESSION_MESSAGE
 }
@@ -491,8 +497,11 @@ mod windows_app {
     ) -> LRESULT {
         if handle_windows_message_kind(msg) {
             if let Ok(config) = load_config() {
-                let _ =
-                    tauri::async_runtime::block_on(crate::action::send_shutdown_signal(&config));
+                return shutdown_notification_response(|| {
+                    let _ = tauri::async_runtime::block_on(
+                        crate::action::send_shutdown_pending(&config),
+                    );
+                }) as LRESULT;
             }
             return query_end_session_result();
         }
@@ -543,7 +552,10 @@ mod windows_app {
 
     #[cfg(test)]
     mod tests {
-        use super::{handle_windows_message, hwnd_store_key, query_end_session_result};
+        use super::{
+            handle_windows_message, hwnd_store_key, query_end_session_result,
+            shutdown_notification_response,
+        };
         use windows_sys::Win32::Foundation::{HWND, LPARAM};
         use windows_sys::Win32::UI::WindowsAndMessaging::WM_QUERYENDSESSION;
 
@@ -557,6 +569,17 @@ mod windows_app {
         #[test]
         fn query_end_session_result_returns_true_lresult_alias() {
             assert_eq!(query_end_session_result(), 1);
+        }
+
+        #[test]
+        fn shutdown_notification_response_invokes_sender_and_returns_query_result() {
+            let mut called = false;
+            let result = shutdown_notification_response(|| {
+                called = true;
+            });
+
+            assert!(called);
+            assert_eq!(result, query_end_session_result());
         }
 
         #[test]
@@ -629,9 +652,10 @@ mod tests {
         query_end_session_result_value, refresh_snapshot_with_retry,
         resolve_user_app_dir_from_base_dir, resolve_user_config_path_from_base_dir,
         resolve_user_log_path_from_base_dir, retry_startup_task, run_best_effort_three,
-        run_serialized_tray_action, set_window_long_ptr_result, startup_mode_from_args,
-        startup_window_action, tolerate_autostart_error, try_restore_existing_window, AppConfig,
-        DeviceIds, DeviceSnapshot, StartupMode, StartupWindowAction,
+        run_serialized_tray_action, set_window_long_ptr_result, shutdown_notification_response,
+        startup_mode_from_args, startup_window_action, tolerate_autostart_error,
+        try_restore_existing_window, AppConfig, DeviceIds, DeviceSnapshot, StartupMode,
+        StartupWindowAction,
     };
     use anyhow::anyhow;
     use std::io::Cursor;
@@ -1432,6 +1456,17 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn shutdown_notification_response_invokes_sender_and_returns_query_result() {
+        let mut called = false;
+        let result = shutdown_notification_response(|| {
+            called = true;
+        });
+
+        assert!(called);
+        assert_eq!(result, query_end_session_result_value());
     }
 
     #[test]

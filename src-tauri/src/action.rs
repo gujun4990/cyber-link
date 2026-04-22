@@ -8,7 +8,10 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::{apply_action, ActionArgs, ActionKind, ActionTarget};
+    use super::{
+        apply_action, send_shutdown_pending, send_startup_online, ActionArgs, ActionKind,
+        ActionTarget,
+    };
 
     fn sample_snapshot(ac_on: bool, switch_on: bool) -> DeviceSnapshot {
         DeviceSnapshot {
@@ -55,6 +58,29 @@ mod tests {
     async fn respond_with_json(mut socket: tokio::net::TcpStream, body: &'static str) {
         let mut buf = vec![0u8; 4096];
         let _ = socket.read(&mut buf).await.expect("read request");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
+    async fn respond_with_request_assertion(
+        mut socket: tokio::net::TcpStream,
+        expected_substring: &'static str,
+        body: &'static str,
+    ) {
+        let mut buf = vec![0u8; 4096];
+        let len = socket.read(&mut buf).await.expect("read request");
+        let request = String::from_utf8_lossy(&buf[..len]);
+        assert!(
+            request.contains(expected_substring),
+            "request did not contain expected substring {expected_substring:?}: {request}"
+        );
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
@@ -189,6 +215,80 @@ mod tests {
 
         assert!(outcome.error.is_none());
         assert!(outcome.snapshot.switch_on);
+    }
+
+    #[tokio::test]
+    async fn shutdown_pending_turns_on_pending_helper() {
+        disable_proxy_env();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept pending request");
+            respond_with_request_assertion(
+                socket,
+                r#"/api/services/input_boolean/turn_on"#,
+                r#"{"state":"ok","attributes":{}}"#,
+            )
+            .await;
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: None,
+                ambient_light: None,
+                ..Default::default()
+            }),
+        };
+
+        let result = send_shutdown_pending(&config).await;
+
+        server.await.expect("server task");
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn startup_online_clears_shutdown_pending_helper() {
+        disable_proxy_env();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept pending clear");
+            respond_with_request_assertion(
+                socket,
+                r#"/api/services/input_boolean/turn_off"#,
+                r#"{"state":"ok","attributes":{}}"#,
+            )
+            .await;
+
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await.expect("accept startup request");
+                respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+            }
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: Some("input_boolean.pc_05_online".into()),
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                ambient_light: None,
+                main_light: None,
+                door_sign_light: None,
+            }),
+        };
+
+        let outcome = send_startup_online(&config).await;
+
+        server.await.expect("server task");
+
+        assert!(outcome.is_ok());
     }
 
     #[tokio::test]
@@ -366,7 +466,7 @@ mod tests {
         let addr = listener.local_addr().expect("listener addr");
 
         let server = tokio::spawn(async move {
-            for _ in 0..3 {
+            for _ in 0..4 {
                 let (socket, _) = listener.accept().await.expect("accept request");
                 respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
             }
@@ -417,6 +517,9 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept ac request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
+
+            let (socket, _) = listener.accept().await.expect("accept pending clear");
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
 
             let (socket, _) = listener.accept().await.expect("accept switch request");
@@ -672,6 +775,12 @@ where
     }
 }
 
+const SHUTDOWN_PENDING_ENTITY_ID: &str = "input_boolean.cyber_link_shutdown_pending";
+
+pub(crate) async fn send_shutdown_pending(config: &AppConfig) -> Result<()> {
+    send_entity_toggle_request(config, SHUTDOWN_PENDING_ENTITY_ID, true).await
+}
+
 async fn send_ha_action(config: &AppConfig, action: HaAction) -> Result<()> {
     send_ha_request(config, action.into_request(config)?).await
 }
@@ -714,6 +823,12 @@ pub(crate) async fn send_startup_online(config: &AppConfig) -> Result<()> {
     let mut first_err: Option<anyhow::Error> = None;
     let (send_pc, send_ac, send_ambient_light, send_main_light, send_door_sign_light) =
         startup_online_targets(config);
+
+    if send_pc || send_ac || send_ambient_light || send_main_light || send_door_sign_light {
+        if let Err(err) = send_entity_toggle_request(config, SHUTDOWN_PENDING_ENTITY_ID, false).await {
+            first_err = Some(err);
+        }
+    }
 
     if send_pc {
         if let Err(err) = send_ha_notification(config, true).await {
