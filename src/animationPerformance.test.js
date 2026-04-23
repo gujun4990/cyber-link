@@ -25,16 +25,15 @@ test('app uses reduced-motion gating for the main ring', () => {
   assertIncludesAll(appSource, [
     'useReducedMotion',
     'prefersReducedMotion',
-    'duration: 90',
+    'duration: 34',
     'repeat: Infinity',
   ]);
 });
 
-test('app shell keeps blur light and removes will-change', () => {
+test('app shell keeps blur light', () => {
   const appSource = loadSource('./App.tsx');
 
   assert.match(appSource, /backdropFilter:\s*'blur\(2px\) saturate\(108%\)'/);
-  assert.doesNotMatch(appSource, /willChange:\s*'transform'/);
 });
 
 test('css animations have reduced-motion fallback', () => {
@@ -48,11 +47,11 @@ test('css animations have reduced-motion fallback', () => {
   ]);
 });
 
-test('temperature core keeps glow lighter and avoids extra will-change', () => {
+test('temperature core keeps glow lighter and preserves compositor hint', () => {
   const appSource = normalizeSource(loadSource('./App.tsx'));
 
   assertIncludesAll(appSource, ['blur-[10px]', 'blur-[4px]']);
-  assert.doesNotMatch(appSource, /willChange:\s*'transform, opacity'/);
+  assert.match(appSource, /willChange:\s*'transform, opacity'/);
 });
 
 test('repeated UI shadows are kept modest', () => {
@@ -71,6 +70,6 @@ test('hover and status bar effects stay subdued', () => {
     'hover:border-cyan-300/25',
     'hover:bg-cyan-400/6',
     'via-cyan-400/35',
-    'shadow-[0_0_4px_rgba(103,232,249,0.3)]',
+    'shadow-[0_0_3px_rgba(103,232,249,0.24)]',
   ]);
 });

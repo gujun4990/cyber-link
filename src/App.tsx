@@ -35,28 +35,20 @@ function formatLogLine(level: ConsoleLogLevelName, message: string) {
 const runtimeMode = (import.meta.env.VITE_CYBER_LINK_RUNTIME ?? 'tauri') as RuntimeMode;
 const runtime = createAppRuntime({ mode: runtimeMode });
 
+const innerRingSpinTransition = { duration: 34, repeat: Infinity, ease: 'linear' };
+
 function lightingIconFor(kind: LightingKind, active: boolean, isCompact: boolean) {
   const size = isCompact ? 20 : 24;
   const className = active ? 'text-yellow-100' : 'text-white/70';
+  const activeStyle = active
+    ? {
+        fill: 'rgba(255, 255, 255, 0.68)',
+        filter:
+          'drop-shadow(0 0 10px rgba(255,255,255,0.58)) drop-shadow(0 0 18px rgba(255,255,255,0.3))',
+      }
+    : undefined;
 
-  if (kind === 'ambientLight') {
-    return (
-      <Lightbulb
-        size={size}
-        className={className}
-        style={
-          active
-            ? {
-                filter:
-                  'drop-shadow(0 0 10px rgba(255,240,180,0.9)) drop-shadow(0 0 18px rgba(255,220,120,0.7))',
-              }
-            : undefined
-        }
-      />
-    );
-  }
-
-  return <Lightbulb size={size} className={className} />;
+  return <Lightbulb size={size} className={className} style={activeStyle} />;
 }
 
 function useLatestRef<T>(value: T) {
@@ -81,15 +73,15 @@ const TempCore = memo(function TempCore({
   onDecrease,
   onIncrease,
   disabled,
+  prefersReducedMotion,
 }: {
   temp: number;
   tempDisplayOn: boolean;
   onDecrease: () => void;
   onIncrease: () => void;
   disabled: boolean;
+  prefersReducedMotion: boolean;
 }) {
-  const prefersReducedMotion = useReducedMotion();
-
   return (
     <div className="flex items-center gap-2">
       <motion.button
@@ -130,6 +122,7 @@ const TempCore = memo(function TempCore({
                   ? '0 0 12px rgba(6,182,212,0.6)'
                   : '0 0 4px rgba(255,255,255,0.05)',
                 transform: 'translateZ(0)',
+                willChange: 'transform, opacity',
               }}
         >
           {temp}
@@ -162,6 +155,7 @@ const TechToggle = memo(function TechToggle({
   icon,
   className,
   isCompact = false,
+  prefersReducedMotion,
 }: {
   active: boolean;
   onClick: () => void;
@@ -171,9 +165,8 @@ const TechToggle = memo(function TechToggle({
   icon: React.ReactNode;
   className?: string;
   isCompact?: boolean;
+  prefersReducedMotion: boolean;
 }) {
-  const prefersReducedMotion = useReducedMotion();
-
   return (
     <motion.button
       whileHover={disabled ? {} : { scale: 1.012, x: 2 }}
@@ -534,7 +527,7 @@ export default function App() {
   const tempDisabled =
     !hasLoadedState || syncingAction || !device.connected || !device.acAvailable || !device.ac.isOn;
 
-  const appShellStyle = useMemo(
+      const appShellStyle = useMemo(
     () => ({
       width: windowSize.width,
       height: windowSize.height,
@@ -542,18 +535,19 @@ export default function App() {
         radial-gradient(circle at 20% 20%, rgba(70, 110, 255, 0.5), transparent 55%),
         linear-gradient(135deg, rgba(28, 48, 118, 0.97), rgba(15, 25, 70, 1))
       `,
-      backdropFilter: 'blur(2px) saturate(108%)',
-      transform: 'translateZ(0)',
-    }),
-    [],
-  );
+        backdropFilter: 'blur(2px) saturate(108%)',
+        transform: 'translateZ(0)',
+        willChange: 'transform',
+      }),
+      [],
+    );
 
   return (
     <motion.div
       layoutId="main-dashboard"
       initial={{ opacity: 0, scale: 0.97, y: 10 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      className="fixed inset-0 m-auto border-[1.5px] border-white/18 overflow-hidden flex flex-col shadow-[0_18px_48px_rgba(0,0,0,0.5),0_0_16px_rgba(6,182,212,0.14)] antialiased"
+      className="fixed inset-0 m-auto border-[1.5px] border-white/18 overflow-hidden flex flex-col shadow-[0_14px_36px_rgba(0,0,0,0.45),0_0_12px_rgba(6,182,212,0.1)] antialiased"
       style={appShellStyle}
     >
       <div className="absolute inset-0 border border-white/8 pointer-events-none z-50" />
@@ -570,7 +564,7 @@ export default function App() {
         }}
       >
         <div className="flex items-center gap-2.5">
-              <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/30 border border-cyan-400/40 rounded shadow-[0_0_6px_rgba(6,182,212,0.28)]">
+              <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/30 border border-cyan-400/40 rounded shadow-[0_0_4px_rgba(6,182,212,0.22)]">
                 <Monitor size={14} className="text-cyan-300" />
               </div>
           <span className="text-[10px] font-black tracking-widest text-white/70 uppercase">
@@ -629,9 +623,9 @@ export default function App() {
                   transition={
                     prefersReducedMotion
                       ? undefined
-                      : { duration: 90, repeat: Infinity, ease: 'linear' }
+                      : innerRingSpinTransition
                   }
-                  style={{ transform: 'translateZ(0)' }}
+                  style={{ transform: 'translateZ(0)', willChange: 'transform' }}
                 />
 
             <div className="absolute w-[250px] h-[250px] border-2 border-cyan-500/8 rounded-full shadow-[inset_0_0_14px_rgba(6,182,212,0.05)]" />
@@ -646,7 +640,7 @@ export default function App() {
                   <div
                     className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-500 overflow-hidden ${
                       coolingModeActive
-                        ? 'border-cyan-100 bg-cyan-400/40 shadow-[0_0_12px_rgba(6,182,212,0.35)]'
+                        ? 'border-cyan-100 bg-cyan-400/40 shadow-[0_0_8px_rgba(6,182,212,0.24)]'
                         : 'border-white/6 bg-white/[0.02]'
                     }`}
                   >
@@ -663,7 +657,7 @@ export default function App() {
                   <div
                     className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-500 overflow-hidden ${
                       heatingModeActive
-                        ? 'border-orange-300 bg-orange-500/30 shadow-[0_0_12px_rgba(249,115,22,0.3)]'
+                        ? 'border-orange-300 bg-orange-500/30 shadow-[0_0_8px_rgba(249,115,22,0.22)]'
                         : 'border-white/6 bg-white/[0.02]'
                     }`}
                   >
@@ -679,7 +673,7 @@ export default function App() {
                 </div>
               </div>
 
-              <TempCore
+          <TempCore
                 temp={device.ac.temp}
                 tempDisplayOn={tempDisplayOn}
                 onDecrease={() => {
@@ -689,6 +683,7 @@ export default function App() {
                   void adjustTemp(1);
                 }}
                 disabled={tempDisabled}
+                prefersReducedMotion={prefersReducedMotion}
               />
             </div>
           </div>
@@ -697,7 +692,7 @@ export default function App() {
             <div className="flex flex-col gap-8">
               <div className="flex flex-col gap-5">
                 <div className="flex items-center gap-3 px-1 mb-2">
-                  <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_4px_white,0_0_8px_rgba(255,255,255,0.14)]" />
+                  <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_3px_white,0_0_6px_rgba(255,255,255,0.12)]" />
                   <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
                     空调控制
                   </span>
@@ -705,10 +700,11 @@ export default function App() {
 
                     <TechToggle
                       active={acDisplayOn}
-                  onClick={toggleAC}
-                  disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}
-                  label="空调核心系统"
-                  subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
+                      onClick={toggleAC}
+                      disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}
+                      label="空调核心系统"
+                      subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
+                      prefersReducedMotion={prefersReducedMotion}
                       icon={
                         <Fan
                           className={acDisplayOn ? 'opacity-80' : ''}
@@ -726,7 +722,7 @@ export default function App() {
               {hasLoadedState && lightingCards.length > 0 && (
                 <div className="flex flex-col gap-6">
                   <div className="flex items-center gap-3 px-1 mb-2">
-                    <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_4px_white,0_0_8px_rgba(255,255,255,0.14)]" />
+                    <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_3px_white,0_0_6px_rgba(255,255,255,0.12)]" />
                     <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
                       照明控制
                     </span>
@@ -760,7 +756,7 @@ export default function App() {
             <div
               className={`w-1.5 h-1.5 rounded-full ${
                 device.connected
-                      ? 'bg-cyan-300 opacity-90 shadow-[0_0_4px_rgba(103,232,249,0.3)]'
+                      ? 'bg-cyan-300 opacity-90 shadow-[0_0_3px_rgba(103,232,249,0.24)]'
                   : 'bg-rose-300'
               }`}
             />
