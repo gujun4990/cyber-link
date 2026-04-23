@@ -169,8 +169,8 @@ const TechToggle = memo(function TechToggle({
 }) {
   return (
     <motion.button
-      whileHover={disabled ? {} : { scale: 1.012, x: 2 }}
-      whileTap={disabled ? {} : { scale: 0.985 }}
+      whileHover={disabled ? {} : { scale: 1.01, x: 1 }}
+      whileTap={disabled ? {} : { scale: 0.992, x: 0, y: 1 }}
       onClick={onClick}
       disabled={disabled}
       className={`relative w-full rounded-xl border ring-1 ring-white/5 transition-all duration-500 flex items-center overflow-hidden group ${
@@ -179,11 +179,13 @@ const TechToggle = memo(function TechToggle({
         isCompact ? 'px-2 py-3 gap-2' : 'px-3.5 py-2.5 gap-3.5'
       } ${
         active
-          ? 'bg-cyan-400/40 border-cyan-100 text-white shadow-[0_0_8px_rgba(6,182,212,0.28)]'
-          : 'bg-[#2a3b7d]/78 border-white/18 text-white/50 shadow-inner ring-white/10'
+          ? 'bg-cyan-400/40 border-cyan-100 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),inset_0_-4px_10px_rgba(0,0,0,0.16),0_0_8px_rgba(6,182,212,0.22)]'
+          : 'bg-[#2a3b7d]/78 border-white/18 text-white/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.12),inset_0_-4px_10px_rgba(0,0,0,0.22),0_1px_2px_rgba(0,0,0,0.12)] ring-white/10'
       } ${className ?? ''}`}
       style={{ transform: 'translateZ(0)' }}
     >
+      <div className="absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/10 to-transparent pointer-events-none" />
+      <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/16 to-transparent pointer-events-none" />
       <div className="absolute inset-0 bg-carbon mix-blend-overlay opacity-5 pointer-events-none" />
 
       <div
@@ -191,8 +193,8 @@ const TechToggle = memo(function TechToggle({
           isCompact ? 'p-1.5' : 'p-2.5'
         } ${
           active
-            ? 'border-cyan-100 bg-cyan-400/40 shadow-[0_0_6px_rgba(6,182,212,0.22)]'
-            : 'border-white/10 bg-white/5 opacity-50'
+            ? 'border-cyan-100 bg-cyan-400/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.16),inset_0_-3px_6px_rgba(0,0,0,0.12)]'
+            : 'border-white/10 bg-white/5 opacity-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-3px_6px_rgba(0,0,0,0.16)]'
         }`}
       >
         <div
