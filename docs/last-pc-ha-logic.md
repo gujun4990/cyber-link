@@ -181,6 +181,223 @@ HA 为每个房间创建一个聚合传感器，例如：
 4. `door_sign_light_entity` 没有配置，所以门牌灯不会被控制
 5. 所有房间 2 电脑都变成 `off` 并持续 30 秒后，blueprint 只关闭已配置的设备
 
+## 环境配置
+
+### 配置bp
+
+创建文件：/opt/homeassistant/blueprints/automation/cyber_link/room_last_pc_control.yaml 内容如下。重启后验证：设置 → 自动化与场景 → 蓝图
+```yaml
+blueprint:
+  name: 房间最后一台电脑离线控制空调和灯
+  description: >
+    房间级在线状态为 on 时，立即打开空调和已配置的灯；
+    房间级在线状态为 off 并持续一段时间后，关闭空调和已配置的灯。
+  domain: automation
+  input:
+    room_online_entity:
+      name: 房间在线聚合实体
+      description: 例如 binary_sensor.room1_any_pc_online
+      selector:
+        entity:
+          domain: binary_sensor
+
+    ac_entity:
+      name: 空调实体
+      default: []
+      selector:
+        entity:
+          multiple: false
+          domain: climate
+
+    ambient_light_entity:
+      name: 氛围灯实体
+      default: []
+      selector:
+        entity:
+          multiple: false
+
+    main_light_entity:
+      name: 主灯实体
+      default: []
+      selector:
+        entity:
+          multiple: false
+
+    door_sign_light_entity:
+      name: 门牌灯实体
+      default: []
+      selector:
+        entity:
+          multiple: false
+
+    delay_seconds:
+      name: 延迟关闭秒数
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 600
+          step: 1
+          mode: box
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input room_online_entity
+    to: "on"
+    id: room_online
+
+  - platform: state
+    entity_id: !input room_online_entity
+    to: "off"
+    for:
+      seconds: !input delay_seconds
+    id: room_offline_delay
+
+variables:
+  ac_entity: !input ac_entity
+  ambient_light_entity: !input ambient_light_entity
+  main_light_entity: !input main_light_entity
+  door_sign_light_entity: !input door_sign_light_entity
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: room_online
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ ac_entity != [] and ac_entity != '' }}"
+            then:
+              - service: climate.turn_on
+                target:
+                  entity_id: !input ac_entity
+
+          - if:
+              - condition: template
+                value_template: "{{ ambient_light_entity != [] and ambient_light_entity != '' }}"
+            then:
+              - service: homeassistant.turn_on
+                target:
+                  entity_id: !input ambient_light_entity
+
+          - if:
+              - condition: template
+                value_template: "{{ main_light_entity != [] and main_light_entity != '' }}"
+            then:
+              - service: homeassistant.turn_on
+                target:
+                  entity_id: !input main_light_entity
+
+          - if:
+              - condition: template
+                value_template: "{{ door_sign_light_entity != [] and door_sign_light_entity != '' }}"
+            then:
+              - service: homeassistant.turn_on
+                target:
+                  entity_id: !input door_sign_light_entity
+
+      - conditions:
+          - condition: trigger
+            id: room_offline_delay
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ ac_entity != [] and ac_entity != '' }}"
+            then:
+              - service: climate.turn_off
+                target:
+                  entity_id: !input ac_entity
+
+          - if:
+              - condition: template
+                value_template: "{{ ambient_light_entity != [] and ambient_light_entity != '' }}"
+            then:
+              - service: homeassistant.turn_off
+                target:
+                  entity_id: !input ambient_light_entity
+
+          - if:
+              - condition: template
+                value_template: "{{ main_light_entity != [] and main_light_entity != '' }}"
+            then:
+              - service: homeassistant.turn_off
+                target:
+                  entity_id: !input main_light_entity
+
+          - if:
+              - condition: template
+                value_template: "{{ door_sign_light_entity != [] and door_sign_light_entity != '' }}"
+            then:
+              - service: homeassistant.turn_off
+                target:
+                  entity_id: !input door_sign_light_entity
+```
+
+### 配置实体
+
+配置文件： /opt/homeassistant/configuration.yaml 内容如下。重启后验证：设置 → 设备与服务 → 实体
+```yaml
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+input_boolean:
+  room1_pc_a_online:
+    name: 房间1-PC-A在线
+  room1_pc_b_online:
+    name: 房间1-PC-B在线
+  room1_pc_c_online:
+    name: 房间1-PC-C在线
+
+  room2_pc_a_online:
+    name: 房间2-PC-A在线
+  room2_pc_b_online:
+    name: 房间2-PC-B在线
+
+template:
+  - binary_sensor:
+      - name: 房间1任意电脑在线
+        unique_id: room1_any_pc_online
+        state: >
+          {{
+            is_state('input_boolean.room1_pc_a_online', 'on')
+            or is_state('input_boolean.room1_pc_b_online', 'on')
+            or is_state('input_boolean.room1_pc_c_online', 'on')
+          }}
+
+      - name: 房间2任意电脑在线
+        unique_id: room2_any_pc_online
+        state: >
+          {{
+            is_state('input_boolean.room2_pc_a_online', 'on')
+            or is_state('input_boolean.room2_pc_b_online', 'on')
+          }}
+```
+
+### 创建自动化
+
+设置 → 自动化与场景 → 蓝图 -> 最右边“创建自动化”
+
+选择如下：
+- 房间在线聚合实体（这里就是我们上面创建“房间1任意电脑在线”和“房间2任意电脑在线”）
+- 空调实体：选择对应房间的空调
+- 氛围灯实体：选择对应房间的氛围灯
+- 主灯实体：选择对应房间的主灯
+- 门牌灯实体：选择对应房间的门牌灯
+- 延迟关闭秒数：默认30s
+
 ## 结论
 
 这套方案保留了 `config.json` 的电脑级可选配置，同时把“最后一台电脑”的判断上移到 HA 的房间级聚合层。这样既能支持多房间，也能支持每个房间设备不完全相同的情况。
