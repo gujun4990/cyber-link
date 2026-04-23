@@ -57,7 +57,7 @@ body {
     background-size: 200% 200%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    animation: iridescent-flow 8s ease infinite;
+    animation: iridescent-flow 16s ease infinite;
   }
 
   .shadow-neumorphic {
@@ -93,7 +93,7 @@ body {
     inset: -1px;
     background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.5), transparent);
     background-size: 200% 100%;
-    animation: border-flow 4s linear infinite;
+    animation: border-flow 12s linear infinite;
     pointer-events: none;
     border-radius: inherit;
     z-index: -1;
@@ -102,6 +102,13 @@ body {
   @keyframes border-flow {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .text-iridescent,
+    .glow-border::after {
+      animation: none;
+    }
   }
 }
 

@@ -11,7 +11,7 @@ import {
   Snowflake,
   X,
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
 import { applyStateRefresh } from './appState.js';
 import { withTimeout } from './initTimeout.js';
@@ -34,8 +34,6 @@ function formatLogLine(level: ConsoleLogLevelName, message: string) {
 
 const runtimeMode = (import.meta.env.VITE_CYBER_LINK_RUNTIME ?? 'tauri') as RuntimeMode;
 const runtime = createAppRuntime({ mode: runtimeMode });
-
-const innerRingSpinTransition = { duration: 34, repeat: Infinity, ease: 'linear' };
 
 function lightingIconFor(kind: LightingKind, active: boolean, isCompact: boolean) {
   const size = isCompact ? 20 : 24;
@@ -69,23 +67,6 @@ function useLatestRef<T>(value: T) {
   return ref;
 }
 
-const ClockText = memo(function ClockText() {
-  const [currentTime, setCurrentTime] = useState(() => new Date());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  return (
-    <span className="font-mono">
-      {currentTime.toLocaleTimeString('zh-CN', { hour12: false })}
-    </span>
-  );
-});
-
 const StatusTicker = memo(function StatusTicker() {
   return (
     <div className="absolute top-0 left-0 w-full h-[1px] pointer-events-none opacity-20">
@@ -107,6 +88,8 @@ const TempCore = memo(function TempCore({
   onIncrease: () => void;
   disabled: boolean;
 }) {
+  const prefersReducedMotion = useReducedMotion();
+
   return (
     <div className="flex items-center gap-2">
       <motion.button
@@ -116,7 +99,7 @@ const TempCore = memo(function TempCore({
         disabled={disabled}
         className={`p-2 transition-all rounded-full border border-transparent ${
           tempDisplayOn
-            ? 'text-cyan-200/90 hover:border-cyan-300/35 hover:bg-cyan-400/8 cursor-pointer'
+            ? 'text-cyan-200/90 hover:border-cyan-300/25 hover:bg-cyan-400/6 cursor-pointer'
             : 'text-cyan-950/20 cursor-not-allowed'
         }`}
       >
@@ -126,12 +109,12 @@ const TempCore = memo(function TempCore({
       <div className="flex flex-col items-center min-w-[140px] relative">
         <div
           className={`absolute inset-0 rounded-full transition-all duration-700 ${
-            tempDisplayOn ? 'bg-cyan-400/16 scale-102 blur-[14px]' : 'bg-transparent'
+                tempDisplayOn ? 'bg-cyan-400/16 scale-102 blur-[10px]' : 'bg-transparent'
           }`}
         />
         <div
           className={`absolute inset-0 rounded-full transition-all duration-700 ${
-            tempDisplayOn ? 'bg-purple-500/4 scale-105 blur-[8px]' : 'bg-transparent'
+                tempDisplayOn ? 'bg-purple-500/4 scale-105 blur-[4px]' : 'bg-transparent'
           }`}
         />
 
@@ -142,13 +125,12 @@ const TempCore = memo(function TempCore({
           className={`text-[9rem] font-black tabular-nums transition-all duration-500 relative z-20 leading-[1.1] ${
             tempDisplayOn ? 'text-iridescent' : 'text-white/10'
           }`}
-          style={{
-            textShadow: tempDisplayOn
-              ? '0 0 12px rgba(6,182,212,0.6)'
-              : '0 0 4px rgba(255,255,255,0.05)',
-            transform: 'translateZ(0)',
-            willChange: 'transform, opacity',
-          }}
+              style={{
+                textShadow: tempDisplayOn
+                  ? '0 0 12px rgba(6,182,212,0.6)'
+                  : '0 0 4px rgba(255,255,255,0.05)',
+                transform: 'translateZ(0)',
+              }}
         >
           {temp}
         </motion.span>
@@ -190,6 +172,8 @@ const TechToggle = memo(function TechToggle({
   className?: string;
   isCompact?: boolean;
 }) {
+  const prefersReducedMotion = useReducedMotion();
+
   return (
     <motion.button
       whileHover={disabled ? {} : { scale: 1.012, x: 2 }}
@@ -202,7 +186,7 @@ const TechToggle = memo(function TechToggle({
         isCompact ? 'px-2 py-3 gap-2' : 'px-3.5 py-2.5 gap-3.5'
       } ${
         active
-          ? 'bg-cyan-400/40 border-cyan-100 text-white shadow-[0_0_12px_rgba(6,182,212,0.35)]'
+          ? 'bg-cyan-400/40 border-cyan-100 text-white shadow-[0_0_8px_rgba(6,182,212,0.28)]'
           : 'bg-[#2a3b7d]/78 border-white/18 text-white/50 shadow-inner ring-white/10'
       } ${className ?? ''}`}
       style={{ transform: 'translateZ(0)' }}
@@ -214,11 +198,18 @@ const TechToggle = memo(function TechToggle({
           isCompact ? 'p-1.5' : 'p-2.5'
         } ${
           active
-            ? 'border-cyan-100 bg-cyan-400/40 shadow-[0_0_12px_rgba(6,182,212,0.35)]'
+            ? 'border-cyan-100 bg-cyan-400/40 shadow-[0_0_6px_rgba(6,182,212,0.22)]'
             : 'border-white/10 bg-white/5 opacity-50'
         }`}
       >
-        <div className={active && label.includes('空调') ? 'animate-spin opacity-90' : ''}>
+        <div
+          className={active && label.includes('空调') ? 'opacity-90' : ''}
+          style={
+            active && label.includes('空调') && !prefersReducedMotion
+              ? { animation: 'spin 10s linear infinite' }
+              : undefined
+          }
+        >
           {React.cloneElement(icon as React.ReactElement, { size: isCompact ? 20 : 24 })}
         </div>
       </div>
@@ -247,7 +238,7 @@ const TechToggle = memo(function TechToggle({
           isCompact ? 'w-2 h-2 ml-1' : 'w-3 h-3'
         } ${
           active
-            ? 'bg-cyan-100 shadow-[0_0_12px_rgba(6,182,212,0.35)]'
+            ? 'bg-cyan-100 shadow-[0_0_6px_rgba(6,182,212,0.22)]'
             : 'bg-black/40 border border-white/10'
         }`}
       />
@@ -256,6 +247,7 @@ const TechToggle = memo(function TechToggle({
 });
 
 export default function App() {
+  const prefersReducedMotion = useReducedMotion();
   const [device, setDevice] = useState<DeviceState>({
     room: '核心-01',
     pcId: '终端-05',
@@ -535,7 +527,6 @@ export default function App() {
         : '系统稳定';
 
   const acDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
-  const ambientLightDisplayOn = hasLoadedState && device.connected && device.ambientLightOn;
   const coolingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp < 20;
   const heatingModeActive = hasLoadedState && device.connected && device.ac.isOn && device.ac.temp > 26;
   const tempDisplayOn = hasLoadedState && device.connected && device.ac.isOn;
@@ -551,9 +542,8 @@ export default function App() {
         radial-gradient(circle at 20% 20%, rgba(70, 110, 255, 0.5), transparent 55%),
         linear-gradient(135deg, rgba(28, 48, 118, 0.97), rgba(15, 25, 70, 1))
       `,
-      backdropFilter: 'blur(6px) saturate(120%)',
+      backdropFilter: 'blur(2px) saturate(108%)',
       transform: 'translateZ(0)',
-      willChange: 'transform',
     }),
     [],
   );
@@ -580,9 +570,9 @@ export default function App() {
         }}
       >
         <div className="flex items-center gap-2.5">
-          <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/30 border border-cyan-400/40 rounded shadow-[0_0_8px_rgba(6,182,212,0.35)]">
-            <Monitor size={14} className="text-cyan-300" />
-          </div>
+              <div className="w-6 h-6 flex items-center justify-center bg-cyan-500/30 border border-cyan-400/40 rounded shadow-[0_0_6px_rgba(6,182,212,0.28)]">
+                <Monitor size={14} className="text-cyan-300" />
+              </div>
           <span className="text-[10px] font-black tracking-widest text-white/70 uppercase">
             Cyber Link v1.0
           </span>
@@ -627,18 +617,22 @@ export default function App() {
       </div>
 
       <div className="relative flex-1 flex flex-col overflow-hidden">
-        <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/55 to-transparent pointer-events-none" />
+      <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/35 to-transparent pointer-events-none" />
 
         <div className="relative flex-1 flex items-center justify-between gap-8 px-8 py-4 overflow-visible">
           <div className="relative flex items-center justify-center w-[360px] h-[360px]">
             <div className="absolute w-[310px] h-[310px] border border-dashed border-cyan-500/18 rounded-full opacity-80" />
 
-            <motion.div
-              className="absolute w-[280px] h-[280px] border border-cyan-400/18 rounded-full border-t-transparent border-b-transparent transform-gpu will-change-transform"
-              animate={{ rotate: -360 }}
-              transition={innerRingSpinTransition}
-              style={{ transform: 'translateZ(0)' }}
-            />
+                <motion.div
+                  className="absolute w-[280px] h-[280px] border border-cyan-400/18 rounded-full border-t-transparent border-b-transparent transform-gpu"
+                  animate={prefersReducedMotion ? undefined : { rotate: -360 }}
+                  transition={
+                    prefersReducedMotion
+                      ? undefined
+                      : { duration: 90, repeat: Infinity, ease: 'linear' }
+                  }
+                  style={{ transform: 'translateZ(0)' }}
+                />
 
             <div className="absolute w-[250px] h-[250px] border-2 border-cyan-500/8 rounded-full shadow-[inset_0_0_14px_rgba(6,182,212,0.05)]" />
 
@@ -703,32 +697,36 @@ export default function App() {
             <div className="flex flex-col gap-8">
               <div className="flex flex-col gap-5">
                 <div className="flex items-center gap-3 px-1 mb-2">
-                  <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_6px_white,0_0_12px_rgba(255,255,255,0.2)]" />
+                  <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_4px_white,0_0_8px_rgba(255,255,255,0.14)]" />
                   <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
                     空调控制
                   </span>
                 </div>
 
-                <TechToggle
-                  active={acDisplayOn}
+                    <TechToggle
+                      active={acDisplayOn}
                   onClick={toggleAC}
                   disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}
                   label="空调核心系统"
                   subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
-                  icon={
-                    <Fan
-                      className={acDisplayOn ? 'opacity-80' : ''}
-                      size={24}
-                      style={acDisplayOn ? { animation: 'spin 120s linear infinite' } : undefined}
+                      icon={
+                        <Fan
+                          className={acDisplayOn ? 'opacity-80' : ''}
+                          size={24}
+                          style={
+                            acDisplayOn && !prefersReducedMotion
+                              ? { animation: 'spin 240s linear infinite' }
+                              : undefined
+                          }
+                        />
+                      }
                     />
-                  }
-                />
               </div>
 
               {hasLoadedState && lightingCards.length > 0 && (
                 <div className="flex flex-col gap-6">
                   <div className="flex items-center gap-3 px-1 mb-2">
-                    <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_6px_white,0_0_12px_rgba(255,255,255,0.2)]" />
+                    <div className="w-2.5 h-2.5 bg-white rotate-45 shadow-[0_0_4px_white,0_0_8px_rgba(255,255,255,0.14)]" />
                     <span className="text-[13px] font-black tracking-[0.4em] text-white uppercase">
                       照明控制
                     </span>
@@ -762,7 +760,7 @@ export default function App() {
             <div
               className={`w-1.5 h-1.5 rounded-full ${
                 device.connected
-                  ? 'bg-cyan-300 opacity-90 shadow-[0_0_6px_rgba(103,232,249,0.5)]'
+                      ? 'bg-cyan-300 opacity-90 shadow-[0_0_4px_rgba(103,232,249,0.3)]'
                   : 'bg-rose-300'
               }`}
             />
