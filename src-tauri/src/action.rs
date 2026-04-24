@@ -1,10 +1,6 @@
 #[cfg(test)]
 mod tests {
     use crate::models::{ACState, AppConfig, DeviceIds, DeviceSnapshot, SwitchState};
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -89,26 +85,29 @@ mod tests {
             .expect("write response");
     }
 
+    async fn respond_with_error(mut socket: tokio::net::TcpStream, status: u16, body: &'static str) {
+        let mut buf = vec![0u8; 4096];
+        let _ = socket.read(&mut buf).await.expect("read request");
+        let response = format!(
+            "HTTP/1.1 {status} ERROR\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
     #[tokio::test]
-    async fn ac_toggle_confirms_refreshed_snapshot() {
+    async fn ac_toggle_returns_immediately_without_retry() {
         disable_proxy_env();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let addr = listener.local_addr().expect("listener addr");
-        let ac_is_on = Arc::new(AtomicBool::new(false));
-        let ac_is_on_for_server = Arc::clone(&ac_is_on);
 
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept post");
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-            ac_is_on_for_server.store(true, Ordering::SeqCst);
-
-            let (socket, _) = listener.accept().await.expect("accept refresh");
-            let body = if ac_is_on_for_server.load(Ordering::SeqCst) {
-                r#"{"state":"cool","attributes":{"temperature":24}}"#
-            } else {
-                r#"{"state":"off","attributes":{}}"#
-            };
-            respond_with_json(socket, body).await;
         });
 
         let config = AppConfig {
@@ -122,67 +121,84 @@ mod tests {
             }),
         };
 
-        let outcome = apply_action(
-            &config,
-            sample_snapshot(false, false),
-            ActionArgs {
-                action: ActionKind::AcToggle,
-                target: None,
-                value: None,
-            },
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            apply_action(
+                &config,
+                sample_snapshot(false, false),
+                ActionArgs {
+                    action: ActionKind::AcToggle,
+                    target: None,
+                    value: None,
+                },
+            ),
         )
         .await
-        .expect("action should refresh state");
+        .expect("action should return immediately")
+        .expect("action should succeed");
 
         server.await.expect("server task");
 
         assert!(outcome.error.is_none());
         assert!(outcome.snapshot.ac.is_on);
-        assert_eq!(outcome.snapshot.ac.temp, 24);
+        assert_eq!(outcome.snapshot.ac.temp, 16);
     }
 
     #[tokio::test]
-    async fn switch_toggle_confirms_refreshed_snapshot() {
+    async fn ac_toggle_preserves_snapshot_when_request_fails() {
         disable_proxy_env();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let addr = listener.local_addr().expect("listener addr");
-        let switch_is_on = Arc::new(AtomicBool::new(false));
-        let switch_is_on_for_server = Arc::clone(&switch_is_on);
 
         let server = tokio::spawn(async move {
-            let mut seen = 0usize;
-            loop {
-                let accepted =
-                    tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
-                        .await;
+            let (socket, _) = listener.accept().await.expect("accept request");
+            respond_with_error(socket, 500, r#"{"message":"boom"}"#).await;
+        });
 
-                let Ok(Ok((socket, _))) = accepted else {
-                    break;
-                };
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                ambient_light: None,
+                ..Default::default()
+            }),
+        };
 
-                match seen {
-                    0 => {
-                        respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-                        switch_is_on_for_server.store(true, Ordering::SeqCst);
-                    }
-                    1 => {
-                        let body = if switch_is_on_for_server.load(Ordering::SeqCst) {
-                            r#"{"state":"on","attributes":{}}"#
-                        } else {
-                            r#"{"state":"off","attributes":{}}"#
-                        };
-                        respond_with_json(socket, body).await;
-                    }
-                    2 => {
-                        respond_with_json(socket, r#"{"state":"on","attributes":{}}"#).await;
-                    }
-                    _ => {
-                        respond_with_json(socket, r#"{"state":"on","attributes":{}}"#).await;
-                    }
-                }
+        let original = sample_snapshot(false, false);
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            apply_action(
+                &config,
+                original.clone(),
+                ActionArgs {
+                    action: ActionKind::AcToggle,
+                    target: None,
+                    value: None,
+                },
+            ),
+        )
+        .await
+        .expect("action should return immediately")
+        .expect("action should succeed");
 
-                seen += 1;
-            }
+        server.await.expect("server task");
+
+        assert!(outcome.error.is_some());
+        assert_eq!(outcome.snapshot.ac.is_on, original.ac.is_on);
+        assert_eq!(outcome.snapshot.ac.temp, original.ac.temp);
+    }
+
+    #[tokio::test]
+    async fn switch_toggle_returns_immediately_without_retry() {
+        disable_proxy_env();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept request");
+            respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
         });
 
         let config = AppConfig {
@@ -196,17 +212,21 @@ mod tests {
             }),
         };
 
-        let outcome = apply_action(
-            &config,
-            sample_snapshot(false, false),
-            ActionArgs {
-                action: ActionKind::SwitchToggle,
-                target: Some(ActionTarget::AmbientLight),
-                value: None,
-            },
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            apply_action(
+                &config,
+                sample_snapshot(false, false),
+                ActionArgs {
+                    action: ActionKind::SwitchToggle,
+                    target: Some(ActionTarget::AmbientLight),
+                    value: None,
+                },
+            ),
         )
         .await
-        .expect("action should refresh state");
+        .expect("action should return immediately")
+        .expect("action should succeed");
 
         server.await.expect("server task");
 
@@ -275,7 +295,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ac_set_temp_confirms_normalized_temperature() {
+    async fn ac_set_temp_returns_normalized_temperature_without_retry() {
         disable_proxy_env();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let addr = listener.local_addr().expect("listener addr");
@@ -290,13 +310,6 @@ mod tests {
 
             let (socket, _) = listener.accept().await.expect("accept post");
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-
-            let (socket, _) = listener.accept().await.expect("accept refresh");
-            respond_with_json(
-                socket,
-                r#"{"state":"cool","attributes":{"temperature":79}}"#,
-            )
-            .await;
         });
 
         let config = AppConfig {
@@ -310,17 +323,21 @@ mod tests {
             }),
         };
 
-        let outcome = apply_action(
-            &config,
-            sample_snapshot(true, false),
-            ActionArgs {
-                action: ActionKind::AcSetTemp,
-                target: None,
-                value: Some(26),
-            },
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            apply_action(
+                &config,
+                sample_snapshot(true, false),
+                ActionArgs {
+                    action: ActionKind::AcSetTemp,
+                    target: None,
+                    value: Some(26),
+                },
+            ),
         )
         .await
-        .expect("action should refresh state");
+        .expect("action should return immediately")
+        .expect("action should succeed");
 
         server.await.expect("server task");
 
@@ -329,7 +346,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ac_set_temp_confirms_clamped_temperature() {
+    async fn ac_set_temp_returns_clamped_temperature_without_retry() {
         disable_proxy_env();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let addr = listener.local_addr().expect("listener addr");
@@ -344,13 +361,6 @@ mod tests {
 
             let (socket, _) = listener.accept().await.expect("accept post");
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
-
-            let (socket, _) = listener.accept().await.expect("accept refresh");
-            respond_with_json(
-                socket,
-                r#"{"state":"cool","attributes":{"temperature":30}}"#,
-            )
-            .await;
         });
 
         let config = AppConfig {
@@ -364,17 +374,21 @@ mod tests {
             }),
         };
 
-        let outcome = apply_action(
-            &config,
-            sample_snapshot(true, false),
-            ActionArgs {
-                action: ActionKind::AcSetTemp,
-                target: None,
-                value: Some(31),
-            },
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            apply_action(
+                &config,
+                sample_snapshot(true, false),
+                ActionArgs {
+                    action: ActionKind::AcSetTemp,
+                    target: None,
+                    value: Some(31),
+                },
+            ),
         )
         .await
-        .expect("action should refresh state");
+        .expect("action should return immediately")
+        .expect("action should succeed");
 
         server.await.expect("server task");
 
@@ -800,55 +814,6 @@ fn notification_timeout(state: bool) -> Duration {
     }
 }
 
-const ACTION_CONFIRMATION_INITIAL_DELAY: Duration = Duration::from_secs(2);
-const ACTION_CONFIRMATION_RETRY_COUNT: usize = 5;
-const ACTION_CONFIRMATION_RETRY_INTERVAL: Duration = Duration::from_secs(2);
-
-async fn confirm_action_snapshot_with_delays<F>(
-    config: &AppConfig,
-    original: &DeviceSnapshot,
-    action_error: Option<String>,
-    expected: F,
-    initial_delay: Duration,
-    retry_count: usize,
-    retry_interval: Duration,
-    pending_message: &'static str,
-) -> ActionApplyOutcome
-where
-    F: Fn(&DeviceSnapshot) -> bool,
-{
-    let mut last_snapshot = original.clone();
-    let mut last_error = action_error;
-
-    tokio::time::sleep(initial_delay).await;
-
-    for _ in 0..retry_count {
-        match fetch_current_snapshot(config).await {
-            Ok(snapshot) => {
-                if expected(&snapshot) {
-                    return ActionApplyOutcome {
-                        snapshot,
-                        error: None,
-                    };
-                }
-
-                last_snapshot = snapshot;
-                last_error = Some(pending_message.to_string());
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-
-        tokio::time::sleep(retry_interval).await;
-    }
-
-    ActionApplyOutcome {
-        snapshot: last_snapshot,
-        error: last_error,
-    }
-}
-
 async fn send_ha_action(config: &AppConfig, action: HaAction) -> Result<()> {
     send_ha_request(config, action.into_request(config)?).await
 }
@@ -996,25 +961,7 @@ pub(crate) async fn apply_action(
     snapshot: DeviceSnapshot,
     args: ActionArgs,
 ) -> Result<ActionApplyOutcome> {
-    apply_action_with_delays(
-        config,
-        snapshot,
-        args,
-        ACTION_CONFIRMATION_INITIAL_DELAY,
-        ACTION_CONFIRMATION_RETRY_COUNT,
-        ACTION_CONFIRMATION_RETRY_INTERVAL,
-    )
-    .await
-}
-
-async fn apply_action_with_delays(
-    config: &AppConfig,
-    mut snapshot: DeviceSnapshot,
-    args: ActionArgs,
-    initial_delay: Duration,
-    retry_count: usize,
-    retry_interval: Duration,
-) -> Result<ActionApplyOutcome> {
+    let mut snapshot = snapshot;
     match args.action {
         ActionKind::AcToggle => {
             if config.ac_entity_id().is_none() {
@@ -1030,18 +977,17 @@ async fn apply_action_with_delays(
                 HaAction::ToggleAc { on: next }.into_request(config)?,
             )
             .await;
+            if let Err(err) = result {
+                return Ok(ActionApplyOutcome {
+                    snapshot: original,
+                    error: Some(err.to_string()),
+                });
+            }
             snapshot.ac.is_on = next;
-            return Ok(confirm_action_snapshot_with_delays(
-                config,
-                &original,
-                result.err().map(|err| err.to_string()),
-                move |current| current.ac.is_on == next,
-                initial_delay,
-                retry_count,
-                retry_interval,
-                "空调尚未进入预期开关状态，继续等待刷新。",
-            )
-            .await);
+            return Ok(ActionApplyOutcome {
+                snapshot,
+                error: None,
+            });
         }
         ActionKind::AcSetTemp => {
             if config.ac_entity_id().is_none() {
@@ -1056,18 +1002,18 @@ async fn apply_action_with_delays(
                 climate_temperature_targets(config, temp_celsius).await?;
             let request = climate_set_temperature_request(config, normalized_temp)?;
             let result = send_ha_request(config, request).await;
+            if let Err(err) = result {
+                return Ok(ActionApplyOutcome {
+                    snapshot: original,
+                    error: Some(err.to_string()),
+                });
+            }
+            snapshot.ac.is_on = true;
             snapshot.ac.temp = confirmed_temp;
-            return Ok(confirm_action_snapshot_with_delays(
-                config,
-                &original,
-                result.err().map(|err| err.to_string()),
-                move |current| current.ac.is_on && current.ac.temp == confirmed_temp,
-                initial_delay,
-                retry_count,
-                retry_interval,
-                "空调尚未进入预期温度状态，继续等待刷新。",
-            )
-            .await);
+            return Ok(ActionApplyOutcome {
+                snapshot,
+                error: None,
+            });
         }
         ActionKind::SwitchToggle => {
             let target = args.target.ok_or_else(|| anyhow!("missing light target"))?;
@@ -1084,6 +1030,12 @@ async fn apply_action_with_delays(
                 ActionTarget::DoorSignLight => !snapshot.door_sign_light_on,
             };
             let result = send_entity_toggle_request(config, entity_id, next).await;
+            if let Err(err) = result {
+                return Ok(ActionApplyOutcome {
+                    snapshot: original,
+                    error: Some(err.to_string()),
+                });
+            }
             match target {
                 ActionTarget::AmbientLight => {
                     snapshot.sync_ambient_light_state(snapshot.ambient_light_available, next)
@@ -1093,21 +1045,10 @@ async fn apply_action_with_delays(
                     snapshot.sync_door_sign_light_state(snapshot.door_sign_light_available, next)
                 }
             }
-            return Ok(confirm_action_snapshot_with_delays(
-                config,
-                &original,
-                result.err().map(|err| err.to_string()),
-                move |current| match target {
-                    ActionTarget::AmbientLight => current.ambient_light_on == next,
-                    ActionTarget::MainLight => current.main_light_on == next,
-                    ActionTarget::DoorSignLight => current.door_sign_light_on == next,
-                },
-                initial_delay,
-                retry_count,
-                retry_interval,
-                "照明尚未进入预期开关状态，继续等待刷新。",
-            )
-            .await);
+            return Ok(ActionApplyOutcome {
+                snapshot,
+                error: None,
+            });
         }
         ActionKind::StartupOnline => {
             send_startup_online(config).await?;

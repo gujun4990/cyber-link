@@ -415,7 +415,8 @@ export default function App() {
       syncingRef.current = true;
       setSyncingAction(true);
       try {
-        await runtime.handleHaAction(request.action, request.target, request.value);
+        const next = await runtime.handleHaAction(request.action, request.target, request.value);
+        setDevice(next);
         setActionFailed(false);
       } catch (error) {
         void reportError('Failed to sync device action', error);
