@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { ACTIONS, clampTemp } from './haActions';
-import { applyStateRefresh } from './appState.js';
+import { applyStateRefresh, shouldIgnoreRevertedActionRefresh } from './appState.js';
 import { withTimeout } from './initTimeout.js';
 import { buildLightingCards, type LightingCard, type LightingKind } from './lightingCards';
 import { createAppRuntime, type ActionName, type DeviceState } from './appRuntime';
@@ -111,8 +111,7 @@ const TempCore = memo(function TempCore({
         />
 
         <motion.span
-          key={temp}
-          initial={{ opacity: 0, scale: 0.92 }}
+          initial={false}
           animate={{ opacity: 1, scale: 1 }}
           className={`text-[9rem] font-black tabular-nums transition-all duration-500 relative z-20 leading-[1.1] ${
             tempDisplayOn ? 'text-iridescent' : 'text-white/10'
@@ -267,6 +266,11 @@ export default function App() {
   const [hasLoadedState, setHasLoadedState] = useState(false);
 
   const syncingRef = useRef(false);
+  const recentActionRef = useRef<{
+    request: { action: ActionName; target?: LightingKind; value?: number };
+    before: DeviceState;
+    at: number;
+  } | null>(null);
   const consoleFallbackRef = useRef<Pick<Console, 'error' | 'warn'>>({
     error: console.error.bind(console),
     warn: console.warn.bind(console),
@@ -354,6 +358,21 @@ export default function App() {
       unlisten = await runtime.subscribeStateRefresh((payload) => {
         if (!payload) return;
 
+        const recentAction = recentActionRef.current;
+        if (
+          recentAction &&
+          shouldIgnoreRevertedActionRefresh(
+            recentAction.before,
+            payload,
+            recentAction.request,
+          )
+        ) {
+          recentActionRef.current = null;
+          return;
+        }
+
+        recentActionRef.current = null;
+
         const latest = latestStateRef.current;
         const next = applyStateRefresh(
           {
@@ -415,10 +434,12 @@ export default function App() {
       syncingRef.current = true;
       setSyncingAction(true);
       try {
-        const next = await runtime.handleHaAction(request.action, request.target, request.value);
-        setDevice(next);
+        const before = latestStateRef.current.device;
+        recentActionRef.current = { request, before };
+        await runtime.handleHaAction(request.action, request.target, request.value);
         setActionFailed(false);
       } catch (error) {
+        recentActionRef.current = null;
         void reportError('Failed to sync device action', error);
         setActionFailed(true);
       } finally {

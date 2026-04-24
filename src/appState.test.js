@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { applyStateRefresh } from './appState.js';
+import { applyStateRefresh, shouldIgnoreRevertedActionRefresh } from './appState.js';
 
 test('applyStateRefresh clears refresh failure state on success', () => {
   const current = {
@@ -49,4 +49,56 @@ test('applyStateRefresh clears refresh failure state on success', () => {
   assert.equal(next.actionFailed, true);
   assert.equal(next.refreshFailed, false);
   assert.equal(next.refreshError, null);
+});
+
+test('shouldIgnoreRevertedActionRefresh ignores stale reverted action refreshes', () => {
+  const before = {
+    room: '核心-01',
+    pcId: '终端-05',
+    ac: { isOn: true, temp: 29 },
+    ambientLightOn: false,
+    mainLightOn: false,
+    doorSignLightOn: false,
+    acAvailable: true,
+    ambientLightAvailable: false,
+    mainLightAvailable: false,
+    doorSignLightAvailable: false,
+    lightCount: 0,
+    connected: true,
+  };
+
+  const actionState = {
+    room: '核心-01',
+    pcId: '终端-05',
+    ac: { isOn: true, temp: 30 },
+    ambientLightOn: false,
+    mainLightOn: false,
+    doorSignLightOn: false,
+    acAvailable: true,
+    ambientLightAvailable: false,
+    mainLightAvailable: false,
+    doorSignLightAvailable: false,
+    lightCount: 0,
+    connected: true,
+  };
+
+  const revertedState = {
+    ...actionState,
+    ac: { isOn: true, temp: 29 },
+  };
+
+  assert.equal(
+    shouldIgnoreRevertedActionRefresh(before, revertedState, { action: 'ac_set_temp', value: 30 }),
+    true,
+  );
+
+  assert.equal(
+    shouldIgnoreRevertedActionRefresh(before, revertedState, { action: 'ac_toggle' }),
+    true,
+  );
+
+  assert.equal(
+    shouldIgnoreRevertedActionRefresh(before, { ...revertedState, ambientLightOn: false }, { action: 'switch_toggle', target: 'ambientLight' }),
+    true,
+  );
 });
