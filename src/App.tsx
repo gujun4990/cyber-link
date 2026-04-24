@@ -19,7 +19,6 @@ import { buildLightingCards, type LightingCard, type LightingKind } from './ligh
 import { createAppRuntime, type ActionName, type DeviceState } from './appRuntime';
 import type { RuntimeMode } from './runtimeMode';
 import windowSize from './shared/windowSize.json';
-import { shouldPauseUi, shouldRefreshOnResume } from './windowPause';
 
 const consoleLogLevels = ['warn', 'error'] as const;
 type ConsoleLogLevel = (typeof consoleLogLevels)[number];
@@ -75,7 +74,6 @@ const TempCore = memo(function TempCore({
   onIncrease,
   disabled,
   prefersReducedMotion,
-  pauseAnimations,
 }: {
   temp: number;
   tempDisplayOn: boolean;
@@ -83,13 +81,12 @@ const TempCore = memo(function TempCore({
   onIncrease: () => void;
   disabled: boolean;
   prefersReducedMotion: boolean;
-  pauseAnimations: boolean;
 }) {
   return (
     <div className="flex items-center gap-2">
       <motion.button
-        whileHover={tempDisplayOn && !pauseAnimations ? { scale: 1.05 } : {}}
-        whileTap={tempDisplayOn && !pauseAnimations ? { scale: 0.95 } : {}}
+        whileHover={tempDisplayOn ? { scale: 1.05 } : {}}
+        whileTap={tempDisplayOn ? { scale: 0.95 } : {}}
         onClick={onDecrease}
         disabled={disabled}
         className={`p-2 transition-all rounded-full border border-transparent ${
@@ -159,7 +156,6 @@ const TechToggle = memo(function TechToggle({
   className,
   isCompact = false,
   prefersReducedMotion,
-  pauseAnimations,
 }: {
   active: boolean;
   onClick: () => void;
@@ -170,12 +166,11 @@ const TechToggle = memo(function TechToggle({
   className?: string;
   isCompact?: boolean;
   prefersReducedMotion: boolean;
-  pauseAnimations: boolean;
 }) {
   return (
     <motion.button
-      whileHover={disabled || pauseAnimations ? {} : { scale: 1.01, x: 1 }}
-      whileTap={disabled || pauseAnimations ? {} : { scale: 0.992, x: 0, y: 1 }}
+      whileHover={disabled ? {} : { scale: 1.01, x: 1 }}
+      whileTap={disabled ? {} : { scale: 0.992, x: 0, y: 1 }}
       onClick={onClick}
       disabled={disabled}
       className={`relative w-full rounded-xl border ring-1 ring-white/5 transition-all duration-500 flex items-center overflow-hidden group ${
@@ -205,7 +200,7 @@ const TechToggle = memo(function TechToggle({
         <div
           className={active && label.includes('空调') ? 'opacity-90' : ''}
           style={
-            active && label.includes('空调') && !pauseAnimations
+            active && label.includes('空调') && !prefersReducedMotion
               ? { animation: 'spin 10s linear infinite' }
               : undefined
           }
@@ -270,16 +265,12 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [syncingAction, setSyncingAction] = useState(false);
   const [hasLoadedState, setHasLoadedState] = useState(false);
-  const [uiPaused, setUiPaused] = useState(false);
-  const [animationEpoch, setAnimationEpoch] = useState(0);
 
   const syncingRef = useRef(false);
   const consoleFallbackRef = useRef<Pick<Console, 'error' | 'warn'>>({
     error: console.error.bind(console),
     warn: console.warn.bind(console),
   });
-  const uiPausedRef = useLatestRef(uiPaused);
-  const wasPausedRef = useRef(false);
 
   const latestStateRef = useLatestRef({
     device,
@@ -352,47 +343,6 @@ export default function App() {
   }, [logMessage]);
 
   useEffect(() => {
-    const syncUiPaused = () => {
-      setUiPaused(shouldPauseUi(document.hidden));
-    };
-
-    syncUiPaused();
-    document.addEventListener('visibilitychange', syncUiPaused);
-
-    return () => {
-      document.removeEventListener('visibilitychange', syncUiPaused);
-    };
-  }, []);
-
-  const refreshHaState = useCallback(async () => {
-    if (refreshing) return;
-
-    setRefreshing(true);
-    try {
-      await withTimeout(runtime.refreshHaState(), 8000, 'refresh_ha_state timed out');
-      setHasLoadedState(true);
-      setActionFailed(false);
-    } catch (error) {
-      void reportError('Failed to refresh HA state', error);
-      setRefreshFailed(true);
-      setRefreshError(describeError(error));
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refreshing, reportError]);
-
-  useEffect(() => {
-    if (shouldRefreshOnResume({ wasPaused: wasPausedRef.current, isPaused: uiPaused, hasLoadedState })) {
-      void refreshHaState();
-      setAnimationEpoch((epoch) => epoch + 1);
-    }
-
-    wasPausedRef.current = uiPaused;
-  }, [hasLoadedState, refreshHaState, uiPaused]);
-
-  const pauseAnimations = uiPaused || prefersReducedMotion;
-
-  useEffect(() => {
     let disposed = false;
     let unlisten: null | (() => void) = null;
 
@@ -403,7 +353,6 @@ export default function App() {
 
       unlisten = await runtime.subscribeStateRefresh((payload) => {
         if (!payload) return;
-        if (uiPausedRef.current) return;
 
         const latest = latestStateRef.current;
         const next = applyStateRefresh(
@@ -457,7 +406,7 @@ export default function App() {
       disposed = true;
       if (unlisten) unlisten();
     };
-  }, [latestStateRef, reportError, uiPausedRef]);
+  }, [latestStateRef, reportError]);
 
   const syncDevice = useCallback(
     async (request: { action: ActionName; target?: LightingKind; value?: number }) => {
@@ -509,18 +458,32 @@ export default function App() {
           label={card.label}
           subLabel={card.subLabel}
           icon={lightingIconFor(card.kind, active, isCompact)}
-          prefersReducedMotion={prefersReducedMotion}
-          pauseAnimations={pauseAnimations}
         />
       );
     },
-    [device.connected, hasLoadedState, syncingAction, syncDevice, prefersReducedMotion, pauseAnimations],
+    [device.connected, hasLoadedState, syncingAction, syncDevice],
   );
+
+  const refreshHaState = useCallback(async () => {
+    if (refreshing) return;
+
+    setRefreshing(true);
+    try {
+      await withTimeout(runtime.refreshHaState(), 8000, 'refresh_ha_state timed out');
+      setHasLoadedState(true);
+      setActionFailed(false);
+    } catch (error) {
+      void reportError('Failed to refresh HA state', error);
+      setRefreshFailed(true);
+      setRefreshError(describeError(error));
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, reportError]);
 
   const hideWindow = useCallback(async () => {
     try {
       await runtime.hideWindow();
-      setUiPaused(true);
     } catch (error) {
       void reportError('Failed to hide window', error);
     }
@@ -529,7 +492,6 @@ export default function App() {
   const minimizeWindow = useCallback(async () => {
     try {
       await runtime.minimizeWindow();
-      setUiPaused(true);
     } catch (error) {
       void reportError('Failed to minimize window', error);
     }
@@ -648,7 +610,7 @@ export default function App() {
         </div>
       </div>
 
-      <div key={animationEpoch} className="relative flex-1 flex flex-col overflow-hidden">
+      <div className="relative flex-1 flex flex-col overflow-hidden">
       <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/35 to-transparent pointer-events-none" />
 
         <div className="relative flex-1 flex items-center justify-between gap-8 px-8 py-4 overflow-visible">
@@ -657,10 +619,14 @@ export default function App() {
 
                 <motion.div
                   className="absolute w-[280px] h-[280px] border border-cyan-400/18 rounded-full border-t-transparent border-b-transparent transform-gpu"
-                    animate={pauseAnimations ? undefined : { rotate: -360 }}
-                    transition={pauseAnimations ? undefined : innerRingSpinTransition}
-                      style={{ transform: 'translateZ(0)', willChange: 'transform' }}
-                    />
+                  animate={prefersReducedMotion ? undefined : { rotate: -360 }}
+                  transition={
+                    prefersReducedMotion
+                      ? undefined
+                      : innerRingSpinTransition
+                  }
+                  style={{ transform: 'translateZ(0)', willChange: 'transform' }}
+                />
 
             <div className="absolute w-[250px] h-[250px] border-2 border-cyan-500/8 rounded-full shadow-[inset_0_0_14px_rgba(6,182,212,0.05)]" />
 
@@ -707,19 +673,18 @@ export default function App() {
                 </div>
               </div>
 
-              <TempCore
-                    temp={device.ac.temp}
-                    tempDisplayOn={tempDisplayOn}
-                    onDecrease={() => {
-                      void adjustTemp(-1);
+          <TempCore
+                temp={device.ac.temp}
+                tempDisplayOn={tempDisplayOn}
+                onDecrease={() => {
+                  void adjustTemp(-1);
                 }}
                 onIncrease={() => {
                   void adjustTemp(1);
-                    }}
-                    disabled={tempDisabled}
-                    prefersReducedMotion={prefersReducedMotion}
-                    pauseAnimations={pauseAnimations}
-                  />
+                }}
+                disabled={tempDisabled}
+                prefersReducedMotion={prefersReducedMotion}
+              />
             </div>
           </div>
 
@@ -733,24 +698,23 @@ export default function App() {
                   </span>
                 </div>
 
-                        <TechToggle
-                          active={acDisplayOn}
-                          onClick={toggleAC}
-                          disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}
-                          label="空调核心系统"
-                          subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
-                          prefersReducedMotion={prefersReducedMotion}
-                          pauseAnimations={pauseAnimations}
-                          icon={
-                            <Fan
-                              className={acDisplayOn ? 'opacity-80' : ''}
-                              size={24}
-                              style={
-                                acDisplayOn && !pauseAnimations
-                                  ? { animation: 'spin 240s linear infinite' }
-                                  : undefined
-                              }
-                            />
+                    <TechToggle
+                      active={acDisplayOn}
+                      onClick={toggleAC}
+                      disabled={!hasLoadedState || syncingAction || !device.connected || !device.acAvailable}
+                      label="空调核心系统"
+                      subLabel={acDisplayOn ? '核心运行中' : '已关闭'}
+                      prefersReducedMotion={prefersReducedMotion}
+                      icon={
+                        <Fan
+                          className={acDisplayOn ? 'opacity-80' : ''}
+                          size={24}
+                          style={
+                            acDisplayOn && !prefersReducedMotion
+                              ? { animation: 'spin 240s linear infinite' }
+                              : undefined
+                          }
+                        />
                       }
                     />
               </div>
