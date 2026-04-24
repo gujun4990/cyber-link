@@ -16,37 +16,37 @@ test('mock runtime starts from offline snapshot', async () => {
 
   assert.equal(initial.connected, false);
   assert.equal(initial.acAvailable, false);
-  assert.equal(initial.switchAvailable, false);
+  assert.equal(initial.ambientLightAvailable, false);
   assert.equal(initial.mainLightAvailable, false);
   assert.equal(initial.doorSignLightAvailable, false);
   assert.equal(initial.ac.isOn, false);
-  assert.equal(initial.switchOn, false);
+  assert.equal(initial.ambientLightOn, false);
   assert.equal(initial.mainLightOn, false);
   assert.equal(initial.doorSignLightOn, false);
 });
 
 test('mock runtime routes switch toggles by target', async () => {
   const runtime = createAppRuntime({ mode: 'mock' });
-  const snapshots: Array<{ doorSignLightOn: boolean; mainLightOn: boolean; switchOn: boolean }> = [];
+  const snapshots: Array<{ doorSignLightOn: boolean; mainLightOn: boolean; ambientLightOn: boolean }> = [];
 
   const unlisten = await runtime.subscribeStateRefresh((snapshot) => {
     snapshots.push({
       doorSignLightOn: snapshot.doorSignLightOn,
       mainLightOn: snapshot.mainLightOn,
-      switchOn: snapshot.switchOn,
+      ambientLightOn: snapshot.ambientLightOn,
     });
   });
 
   const initial = await runtime.initializeApp();
   assert.equal(initial.doorSignLightAvailable, false);
   assert.equal(initial.mainLightAvailable, false);
-  assert.equal(initial.switchAvailable, false);
+  assert.equal(initial.ambientLightAvailable, false);
   assert.equal(initial.doorSignLightOn, false);
 
   const live = await runtime.refreshHaState();
   assert.equal(live.doorSignLightAvailable, true);
   assert.equal(live.mainLightAvailable, true);
-  assert.equal(live.switchAvailable, true);
+  assert.equal(live.ambientLightAvailable, true);
   assert.equal(live.doorSignLightOn, true);
 
   const afterToggle = await runtime.handleHaAction('switch_toggle', 'mainLight');
@@ -95,18 +95,18 @@ test('mock runtime startup and shutdown mirror direct-control fallback', async (
   const afterStartup = await runtime.handleHaAction('startup_online');
   assert.equal(afterStartup.connected, true);
   assert.equal(afterStartup.ac.isOn, true);
-  assert.equal(afterStartup.switchOn, true);
+  assert.equal(afterStartup.ambientLightOn, true);
   assert.equal(afterStartup.mainLightOn, true);
   assert.equal(afterStartup.doorSignLightOn, true);
 
   const afterShutdown = await runtime.handleHaAction('shutdown_signal');
   assert.equal(afterShutdown.connected, true);
   assert.equal(afterShutdown.ac.isOn, false);
-  assert.equal(afterShutdown.switchOn, false);
+  assert.equal(afterShutdown.ambientLightOn, false);
   assert.equal(afterShutdown.mainLightOn, false);
   assert.equal(afterShutdown.doorSignLightOn, false);
   assert.equal(afterShutdown.acAvailable, live.acAvailable);
-  assert.equal(afterShutdown.switchAvailable, live.switchAvailable);
+  assert.equal(afterShutdown.ambientLightAvailable, live.ambientLightAvailable);
   assert.equal(afterShutdown.mainLightAvailable, live.mainLightAvailable);
   assert.equal(afterShutdown.doorSignLightAvailable, live.doorSignLightAvailable);
 });
@@ -122,18 +122,17 @@ test('mock runtime keeps shutdown snapshots unchanged', async () => {
     ...initial,
     connected: false,
     acAvailable: false,
-    switchAvailable: false,
     ambientLightAvailable: false,
     mainLightAvailable: false,
     doorSignLightAvailable: false,
   });
   assert.equal(afterShutdown.connected, true);
   assert.equal(afterShutdown.ac.isOn, false);
-  assert.equal(afterShutdown.switchOn, false);
+  assert.equal(afterShutdown.ambientLightOn, false);
   assert.equal(afterShutdown.mainLightOn, false);
   assert.equal(afterShutdown.doorSignLightOn, false);
   assert.equal(afterShutdown.acAvailable, live.acAvailable);
-  assert.equal(afterShutdown.switchAvailable, live.switchAvailable);
+  assert.equal(afterShutdown.ambientLightAvailable, live.ambientLightAvailable);
   assert.equal(afterShutdown.mainLightAvailable, live.mainLightAvailable);
   assert.equal(afterShutdown.doorSignLightAvailable, live.doorSignLightAvailable);
 });

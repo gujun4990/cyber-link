@@ -10,7 +10,7 @@ mod tests {
 
     use super::{apply_action, send_startup_online, ActionArgs, ActionKind, ActionTarget};
 
-    fn sample_snapshot(ac_on: bool, switch_on: bool) -> DeviceSnapshot {
+    fn sample_snapshot(ac_on: bool, ambient_light_on: bool) -> DeviceSnapshot {
         DeviceSnapshot {
             room: "核心-01".into(),
             pc_id: "终端-05".into(),
@@ -20,10 +20,10 @@ mod tests {
                 temp: 16,
             },
             switch: SwitchState {
-                is_on: switch_on,
+                is_on: ambient_light_on,
                 is_available: true,
             },
-            switch_on,
+            ambient_light_on,
             main_light: SwitchState {
                 is_on: false,
                 is_available: true,
@@ -35,7 +35,7 @@ mod tests {
             main_light_on: false,
             door_sign_light_on: false,
             ac_available: true,
-            switch_available: true,
+            ambient_light_available: true,
             main_light_available: true,
             door_sign_light_available: true,
             light_count: 3,
@@ -211,7 +211,7 @@ mod tests {
         server.await.expect("server task");
 
         assert!(outcome.error.is_none());
-        assert!(outcome.snapshot.switch_on);
+        assert!(outcome.snapshot.ambient_light_on);
     }
 
     #[tokio::test]
@@ -271,7 +271,7 @@ mod tests {
 
         assert!(outcome.error.is_none());
         assert!(outcome.snapshot.main_light_on);
-        assert!(!outcome.snapshot.switch_on);
+        assert!(!outcome.snapshot.ambient_light_on);
     }
 
     #[tokio::test]
@@ -442,11 +442,11 @@ mod tests {
         let mut snapshot = sample_snapshot(false, false);
         snapshot.connected = false;
         snapshot.ac_available = false;
-        snapshot.switch_available = false;
+        snapshot.ambient_light_available = false;
         snapshot.ac.is_available = false;
         snapshot.switch.is_available = false;
         snapshot.ac.is_on = false;
-        snapshot.switch_on = false;
+        snapshot.ambient_light_on = false;
         snapshot.switch.is_on = false;
 
         let outcome = apply_action(
@@ -466,11 +466,11 @@ mod tests {
         assert!(outcome.error.is_none());
         assert!(outcome.snapshot.connected);
         assert!(!outcome.snapshot.ac_available);
-        assert!(!outcome.snapshot.switch_available);
+        assert!(!outcome.snapshot.ambient_light_available);
         assert!(!outcome.snapshot.ac.is_available);
         assert!(!outcome.snapshot.switch.is_available);
         assert!(!outcome.snapshot.ac.is_on);
-        assert!(!outcome.snapshot.switch_on);
+        assert!(!outcome.snapshot.ambient_light_on);
         assert!(!outcome.snapshot.switch.is_on);
     }
 
@@ -520,10 +520,10 @@ mod tests {
         assert!(outcome.snapshot.connected);
         assert!(outcome.snapshot.ac_available);
         assert!(outcome.snapshot.ac.is_available);
-        assert!(outcome.snapshot.switch_available);
+        assert!(outcome.snapshot.ambient_light_available);
         assert!(outcome.snapshot.switch.is_available);
         assert!(outcome.snapshot.ac.is_on);
-        assert!(outcome.snapshot.switch_on);
+        assert!(outcome.snapshot.ambient_light_on);
         assert!(outcome.snapshot.switch.is_on);
     }
 
@@ -630,11 +630,11 @@ mod tests {
         let mut snapshot = sample_snapshot(false, false);
         snapshot.connected = false;
         snapshot.ac_available = false;
-        snapshot.switch_available = false;
+        snapshot.ambient_light_available = false;
         snapshot.ac.is_available = false;
         snapshot.switch.is_available = false;
         snapshot.ac.is_on = false;
-        snapshot.switch_on = false;
+        snapshot.ambient_light_on = false;
         snapshot.switch.is_on = false;
 
         let outcome = apply_action(
@@ -654,11 +654,11 @@ mod tests {
         assert!(outcome.error.is_none());
         assert!(outcome.snapshot.connected);
         assert!(!outcome.snapshot.ac_available);
-        assert!(!outcome.snapshot.switch_available);
+        assert!(!outcome.snapshot.ambient_light_available);
         assert!(!outcome.snapshot.ac.is_available);
         assert!(!outcome.snapshot.switch.is_available);
         assert!(!outcome.snapshot.ac.is_on);
-        assert!(!outcome.snapshot.switch_on);
+        assert!(!outcome.snapshot.ambient_light_on);
         assert!(!outcome.snapshot.switch.is_on);
     }
 
@@ -674,9 +674,9 @@ mod tests {
         assert!(snapshot.ac_available);
         assert!(snapshot.ac.is_available);
         assert!(snapshot.ac.is_on);
-        assert!(snapshot.switch_available);
+        assert!(snapshot.ambient_light_available);
         assert!(snapshot.switch.is_available);
-        assert!(!snapshot.switch_on);
+        assert!(!snapshot.ambient_light_on);
         assert!(!snapshot.switch.is_on);
         assert!(snapshot.main_light_available);
         assert!(snapshot.main_light.is_available);
@@ -1079,13 +1079,15 @@ async fn apply_action_with_delays(
             .ok_or_else(|| anyhow!("light target is not configured"))?;
             let original = snapshot.clone();
             let next = match target {
-                ActionTarget::AmbientLight => !snapshot.switch_on,
+                ActionTarget::AmbientLight => !snapshot.ambient_light_on,
                 ActionTarget::MainLight => !snapshot.main_light_on,
                 ActionTarget::DoorSignLight => !snapshot.door_sign_light_on,
             };
             let result = send_entity_toggle_request(config, entity_id, next).await;
             match target {
-                ActionTarget::AmbientLight => snapshot.sync_ambient_light_state(snapshot.switch_available, next),
+                ActionTarget::AmbientLight => {
+                    snapshot.sync_ambient_light_state(snapshot.ambient_light_available, next)
+                }
                 ActionTarget::MainLight => snapshot.sync_main_light_state(snapshot.main_light_available, next),
                 ActionTarget::DoorSignLight => {
                     snapshot.sync_door_sign_light_state(snapshot.door_sign_light_available, next)
@@ -1096,7 +1098,7 @@ async fn apply_action_with_delays(
                 &original,
                 result.err().map(|err| err.to_string()),
                 move |current| match target {
-                    ActionTarget::AmbientLight => current.switch_on == next,
+                    ActionTarget::AmbientLight => current.ambient_light_on == next,
                     ActionTarget::MainLight => current.main_light_on == next,
                     ActionTarget::DoorSignLight => current.door_sign_light_on == next,
                 },

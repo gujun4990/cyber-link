@@ -73,7 +73,7 @@ impl DeviceSnapshot {
 
     pub(crate) fn set_ambient_light_available(&mut self, available: bool) {
         self.switch.is_available = available;
-        self.switch_available = available;
+        self.ambient_light_available = available;
     }
 
     pub(crate) fn set_main_light_available(&mut self, available: bool) {
@@ -92,7 +92,7 @@ impl DeviceSnapshot {
 
     pub(crate) fn set_ambient_light_on(&mut self, is_on: bool) {
         self.switch.is_on = is_on;
-        self.switch_on = is_on;
+        self.ambient_light_on = is_on;
     }
 
     pub(crate) fn set_main_light_on(&mut self, is_on: bool) {
@@ -113,9 +113,9 @@ impl DeviceSnapshot {
 
     pub(crate) fn sync_ambient_light_state(&mut self, is_available: bool, is_on: bool) {
         self.switch.is_available = is_available;
-        self.switch_available = is_available;
+        self.ambient_light_available = is_available;
         self.switch.is_on = is_on;
-        self.switch_on = is_on;
+        self.ambient_light_on = is_on;
     }
 
     pub(crate) fn sync_main_light_state(&mut self, is_available: bool, is_on: bool) {
@@ -134,6 +134,7 @@ impl DeviceSnapshot {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ACState {
     pub is_on: bool,
     pub is_available: bool,
@@ -157,16 +158,16 @@ pub struct DeviceSnapshot {
     pub main_light: SwitchState,
     #[serde(rename = "doorSignLight")]
     pub door_sign_light: SwitchState,
-    #[serde(rename = "switchOn")]
-    pub switch_on: bool,
+    #[serde(rename = "ambientLightOn")]
+    pub ambient_light_on: bool,
     #[serde(rename = "mainLightOn")]
     pub main_light_on: bool,
     #[serde(rename = "doorSignLightOn")]
     pub door_sign_light_on: bool,
     #[serde(rename = "acAvailable")]
     pub ac_available: bool,
-    #[serde(rename = "switchAvailable")]
-    pub switch_available: bool,
+    #[serde(rename = "ambientLightAvailable")]
+    pub ambient_light_available: bool,
     #[serde(rename = "mainLightAvailable")]
     pub main_light_available: bool,
     #[serde(rename = "doorSignLightAvailable")]
@@ -217,11 +218,11 @@ mod tests {
                 is_on: false,
                 is_available: false,
             },
-            switch_on: false,
+            ambient_light_on: false,
             main_light_on: false,
             door_sign_light_on: false,
             ac_available: false,
-            switch_available: false,
+            ambient_light_available: false,
             main_light_available: false,
             door_sign_light_available: false,
             light_count: 0,
@@ -236,10 +237,10 @@ mod tests {
         assert!(snapshot.ac.is_available);
         assert!(snapshot.ac_available);
         assert!(snapshot.switch.is_available);
-        assert!(snapshot.switch_available);
+        assert!(snapshot.ambient_light_available);
         assert!(snapshot.ac.is_on);
         assert!(snapshot.switch.is_on);
-        assert!(snapshot.switch_on);
+        assert!(snapshot.ambient_light_on);
     }
 
     #[test]
@@ -278,5 +279,68 @@ mod tests {
         );
 
         assert!(config.is_err());
+    }
+
+    #[test]
+    fn ac_state_serializes_with_camel_case_fields() {
+        let snapshot = DeviceSnapshot {
+            room: "核心-01".into(),
+            pc_id: "终端-05".into(),
+            ac: ACState {
+                is_on: true,
+                is_available: true,
+                temp: 25,
+            },
+            switch: SwitchState::default(),
+            main_light: SwitchState::default(),
+            door_sign_light: SwitchState::default(),
+            ambient_light_on: false,
+            main_light_on: false,
+            door_sign_light_on: false,
+            ac_available: true,
+            ambient_light_available: false,
+            main_light_available: false,
+            door_sign_light_available: false,
+            light_count: 0,
+            connected: true,
+        };
+
+        let value = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        let ac = value.get("ac").and_then(serde_json::Value::as_object).expect("ac object");
+
+        assert_eq!(ac.get("isOn").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(ac.get("isAvailable").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(ac.get("temp").and_then(serde_json::Value::as_i64), Some(25));
+        assert_eq!(ac.get("is_on"), None);
+    }
+
+    #[test]
+    fn ambient_light_state_serializes_with_camel_case_fields() {
+        let snapshot = DeviceSnapshot {
+            room: "核心-01".into(),
+            pc_id: "终端-05".into(),
+            ac: ACState::default(),
+            switch: SwitchState {
+                is_on: true,
+                is_available: true,
+            },
+            main_light: SwitchState::default(),
+            door_sign_light: SwitchState::default(),
+            ambient_light_on: true,
+            main_light_on: false,
+            door_sign_light_on: false,
+            ac_available: false,
+            ambient_light_available: true,
+            main_light_available: false,
+            door_sign_light_available: false,
+            light_count: 0,
+            connected: true,
+        };
+
+        let value = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        assert_eq!(value.get("ambientLightOn").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(value.get("ambientLightAvailable").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(value.get("switchOn"), None);
+        assert_eq!(value.get("switchAvailable"), None);
     }
 }

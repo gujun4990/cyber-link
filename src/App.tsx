@@ -252,12 +252,10 @@ export default function App() {
     room: '核心-01',
     pcId: '终端-05',
     ac: { isOn: true, temp: 16 },
-    switchOn: false,
     ambientLightOn: false,
     mainLightOn: false,
     doorSignLightOn: false,
     acAvailable: true,
-    switchAvailable: true,
     ambientLightAvailable: true,
     mainLightAvailable: true,
     doorSignLightAvailable: true,
@@ -273,6 +271,7 @@ export default function App() {
   const [syncingAction, setSyncingAction] = useState(false);
   const [hasLoadedState, setHasLoadedState] = useState(false);
   const [uiPaused, setUiPaused] = useState(false);
+  const [animationEpoch, setAnimationEpoch] = useState(0);
 
   const syncingRef = useRef(false);
   const consoleFallbackRef = useRef<Pick<Console, 'error' | 'warn'>>({
@@ -385,6 +384,7 @@ export default function App() {
   useEffect(() => {
     if (shouldRefreshOnResume({ wasPaused: wasPausedRef.current, isPaused: uiPaused, hasLoadedState })) {
       void refreshHaState();
+      setAnimationEpoch((epoch) => epoch + 1);
     }
 
     wasPausedRef.current = uiPaused;
@@ -648,7 +648,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="relative flex-1 flex flex-col overflow-hidden">
+      <div key={animationEpoch} className="relative flex-1 flex flex-col overflow-hidden">
       <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/35 to-transparent pointer-events-none" />
 
         <div className="relative flex-1 flex items-center justify-between gap-8 px-8 py-4 overflow-visible">

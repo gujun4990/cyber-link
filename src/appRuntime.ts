@@ -10,12 +10,10 @@ export interface DeviceState {
   room: string;
   pcId: string;
   ac: ACState;
-  switchOn: boolean;
   ambientLightOn: boolean;
   mainLightOn: boolean;
   doorSignLightOn: boolean;
   acAvailable: boolean;
-  switchAvailable: boolean;
   ambientLightAvailable: boolean;
   mainLightAvailable: boolean;
   doorSignLightAvailable: boolean;
@@ -54,12 +52,8 @@ function cloneState(state: DeviceState): DeviceState {
   return JSON.parse(JSON.stringify(state)) as DeviceState;
 }
 
-function withAmbientLightAliases(state: DeviceState): DeviceState {
-  return {
-    ...state,
-    ambientLightOn: state.switchOn,
-    ambientLightAvailable: state.switchAvailable,
-  };
+function normalizeAmbientLightState(state: DeviceState): DeviceState {
+  return state;
 }
 
 function createMockLiveState(): DeviceState {
@@ -67,12 +61,10 @@ function createMockLiveState(): DeviceState {
     room: '核心-01',
     pcId: '终端-05',
     ac: { isOn: true, temp: 24 },
-    switchOn: false,
     ambientLightOn: false,
     mainLightOn: true,
     doorSignLightOn: true,
     acAvailable: true,
-    switchAvailable: true,
     ambientLightAvailable: true,
     mainLightAvailable: true,
     doorSignLightAvailable: true,
@@ -86,12 +78,10 @@ function createMockOfflineState(): DeviceState {
     room: '核心-01',
     pcId: '终端-05',
     ac: { isOn: false, temp: 24 },
-    switchOn: false,
     ambientLightOn: false,
     mainLightOn: false,
     doorSignLightOn: false,
     acAvailable: false,
-    switchAvailable: false,
     ambientLightAvailable: false,
     mainLightAvailable: false,
     doorSignLightAvailable: false,
@@ -119,7 +109,7 @@ function applyMockAction(
     case 'switch_toggle':
       switch (target) {
         case 'ambientLight':
-          next.switchOn = !next.switchOn;
+          next.ambientLightOn = !next.ambientLightOn;
           break;
         case 'mainLight':
           next.mainLightOn = !next.mainLightOn;
@@ -134,13 +124,13 @@ function applyMockAction(
     case 'startup_online':
       next.connected = true;
       next.ac.isOn = true;
-      next.switchOn = true;
+      next.ambientLightOn = true;
       next.mainLightOn = true;
       next.doorSignLightOn = true;
       return next;
     case 'shutdown_signal':
       next.ac.isOn = false;
-      next.switchOn = false;
+      next.ambientLightOn = false;
       next.mainLightOn = false;
       next.doorSignLightOn = false;
       return next;
@@ -152,7 +142,7 @@ function createMockRuntime(): AppRuntime {
   const listeners = new Set<(snapshot: DeviceState) => void>();
 
   const emit = () => {
-    const snapshot = withAmbientLightAliases(cloneState(state));
+    const snapshot = normalizeAmbientLightState(cloneState(state));
     for (const listener of listeners) {
       listener(snapshot);
     }
@@ -162,7 +152,7 @@ function createMockRuntime(): AppRuntime {
   return {
     mode: 'mock',
     initializeApp: async () => {
-      const offlineSnapshot = withAmbientLightAliases(createMockOfflineState());
+      const offlineSnapshot = normalizeAmbientLightState(createMockOfflineState());
       state = createMockLiveState();
       queueMicrotask(() => {
         emit();
@@ -225,24 +215,24 @@ function createTauriRuntime(): AppRuntime {
       mode: 'tauri',
       initializeApp: async () => {
         const { invoke } = await loadTauriApi();
-      return withAmbientLightAliases(await invoke<DeviceState>('initialize_app'));
+      return normalizeAmbientLightState(await invoke<DeviceState>('initialize_app'));
       },
       refreshHaState: async () => {
         const { invoke } = await loadTauriApi();
-      return withAmbientLightAliases(await invoke<DeviceState>('refresh_ha_state'));
+      return normalizeAmbientLightState(await invoke<DeviceState>('refresh_ha_state'));
       },
       handleHaAction: async (action, target, value) => {
         const { invoke } = await loadTauriApi();
-       return withAmbientLightAliases(
-         await invoke<DeviceState>(
-           'handle_ha_action',
-           value === undefined ? { action, target } : { action, target, value },
-         ),
-       );
+        return normalizeAmbientLightState(
+          await invoke<DeviceState>(
+            'handle_ha_action',
+            value === undefined ? { action, target } : { action, target, value },
+          ),
+        );
       },
       subscribeStateRefresh: async (handler) => {
         const { listen } = await loadTauriApi();
-      return listen<DeviceState>('state-refresh', (event) => handler(withAmbientLightAliases(event.payload)));
+      return listen<DeviceState>('state-refresh', (event) => handler(normalizeAmbientLightState(event.payload)));
       },
     isAutostartMode: async () => {
       const { invoke } = await loadTauriApi();

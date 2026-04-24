@@ -22,11 +22,11 @@ pub fn initial_snapshot(light_count: u8) -> DeviceSnapshot {
             is_on: true,
             is_available: true,
         },
-        switch_on: true,
+        ambient_light_on: true,
         main_light_on: true,
         door_sign_light_on: true,
         ac_available: true,
-        switch_available: true,
+        ambient_light_available: true,
         main_light_available: true,
         door_sign_light_available: true,
         light_count,
@@ -215,10 +215,10 @@ mod tests {
         assert!(!snapshot.ac.is_available);
         assert!(!snapshot.switch.is_available);
         assert!(!snapshot.ac_available);
-        assert!(!snapshot.switch_available);
+        assert!(!snapshot.ambient_light_available);
         assert!(!snapshot.ac.is_on);
         assert!(!snapshot.switch.is_on);
-        assert!(!snapshot.switch_on);
+        assert!(!snapshot.ambient_light_on);
     }
 
     #[test]
@@ -238,10 +238,10 @@ mod tests {
         assert!(snapshot.ac.is_available);
         assert!(snapshot.ac_available);
         assert!(!snapshot.switch.is_available);
-        assert!(!snapshot.switch_available);
+        assert!(!snapshot.ambient_light_available);
         assert!(snapshot.ac.is_on);
         assert_eq!(snapshot.ac.temp, 25);
-        assert!(!snapshot.switch_on);
+        assert!(!snapshot.ambient_light_on);
     }
 
     #[test]
@@ -297,8 +297,8 @@ mod tests {
         assert!(!snapshot.ac_available);
         assert!(!snapshot.ac.is_on);
         assert!(!snapshot.switch.is_available);
-        assert!(!snapshot.switch_available);
-        assert!(!snapshot.switch_on);
+        assert!(!snapshot.ambient_light_available);
+        assert!(!snapshot.ambient_light_on);
     }
 
     #[test]
@@ -321,10 +321,10 @@ mod tests {
         assert!(snapshot.ac.is_available);
         assert!(snapshot.ac_available);
         assert!(snapshot.switch.is_available);
-        assert!(snapshot.switch_available);
+        assert!(snapshot.ambient_light_available);
         assert!(snapshot.ac.is_on);
         assert_eq!(snapshot.ac.temp, 24);
-        assert!(!snapshot.switch_on);
+        assert!(!snapshot.ambient_light_on);
     }
 
     #[test]
@@ -346,9 +346,9 @@ mod tests {
         assert!(snapshot.ac.is_available);
         assert!(snapshot.ac_available);
         assert!(!snapshot.switch.is_available);
-        assert!(!snapshot.switch_available);
+        assert!(!snapshot.ambient_light_available);
         assert!(snapshot.ac.is_on);
         assert_eq!(snapshot.ac.temp, 24);
-        assert!(!snapshot.switch_on);
+        assert!(!snapshot.ambient_light_on);
     }
 }

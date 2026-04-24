@@ -1670,13 +1670,13 @@ mod tests {
             Err::<(), anyhow::Error>(anyhow!("ha failed")),
             snapshot.clone(),
             |s| {
-                s.switch_on = !s.switch_on;
+                s.ambient_light_on = !s.ambient_light_on;
             },
         )
         .await;
 
         assert!(result.is_err());
-        assert!(snapshot.switch_on);
+        assert!(snapshot.ambient_light_on);
     }
 
     #[tokio::test]
