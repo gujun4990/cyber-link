@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceIds {
     #[serde(default)]
@@ -133,12 +133,22 @@ impl DeviceSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ACState {
     pub is_on: bool,
     pub is_available: bool,
     pub temp: i32,
+    #[serde(default)]
+    pub min_temp: Option<f64>,
+    #[serde(default)]
+    pub max_temp: Option<f64>,
+    #[serde(default)]
+    pub target_temp_step: Option<f64>,
+    #[serde(default)]
+    pub temperature_unit: Option<String>,
+    #[serde(default)]
+    pub unit_of_measurement: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,7 +157,7 @@ pub struct SwitchState {
     pub is_available: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DeviceSnapshot {
     pub room: String,
     #[serde(rename = "pcId")]
@@ -205,6 +215,7 @@ mod tests {
                 is_on: false,
                 is_available: false,
                 temp: 24,
+                ..Default::default()
             },
             switch: SwitchState {
                 is_on: false,
@@ -290,6 +301,7 @@ mod tests {
                 is_on: true,
                 is_available: true,
                 temp: 25,
+                ..Default::default()
             },
             switch: SwitchState::default(),
             main_light: SwitchState::default(),

@@ -1,5 +1,5 @@
 use crate::models::{AppConfig, DeviceSnapshot, HaEntityState, SwitchState};
-use crate::temperature::temperature_from_attributes;
+use crate::temperature::{parse_double, parse_temperature_unit, temperature_from_attributes};
 
 pub fn initial_snapshot(light_count: u8) -> DeviceSnapshot {
     DeviceSnapshot {
@@ -9,6 +9,7 @@ pub fn initial_snapshot(light_count: u8) -> DeviceSnapshot {
             is_on: true,
             is_available: true,
             temp: 16,
+            ..Default::default()
         },
         switch: SwitchState {
             is_on: true,
@@ -69,6 +70,23 @@ pub fn snapshot_from_loaded_states(
     snapshot.set_door_sign_light_available(false);
 
     if let Some(ac_state) = ac_state {
+        snapshot.ac.min_temp = parse_double(&ac_state.attributes, &["min_temp"]);
+        snapshot.ac.max_temp = parse_double(&ac_state.attributes, &["max_temp"]);
+        snapshot.ac.target_temp_step = parse_double(
+            &ac_state.attributes,
+            &["step", "temperature_step", "target_temp_step"],
+        );
+        snapshot.ac.unit_of_measurement = ac_state
+            .attributes
+            .get("unit_of_measurement")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        snapshot.ac.temperature_unit = parse_temperature_unit(&ac_state.attributes)
+            .map(|unit| match unit {
+                crate::temperature::TemperatureUnit::Celsius => "°C".to_string(),
+                crate::temperature::TemperatureUnit::Fahrenheit => "°F".to_string(),
+            });
+
         let is_available = !ac_state.state.eq_ignore_ascii_case("unavailable");
         snapshot.set_ac_available(is_available);
         snapshot.set_ac_on(is_available && !ac_state.state.eq_ignore_ascii_case("off"));
@@ -262,6 +280,25 @@ mod tests {
 
         assert!(snapshot.ac.is_available);
         assert_eq!(snapshot.ac.temp, 25);
+    }
+
+    #[test]
+    fn snapshot_from_loaded_states_preserves_unit_of_measurement_metadata() {
+        let pc_state = HaEntityState {
+            state: "on".into(),
+            attributes: serde_json::json!({}),
+        };
+        let ac_state = HaEntityState {
+            state: "cool".into(),
+            attributes: serde_json::json!({
+                "temperature": 77,
+                "unit_of_measurement": "°F"
+            }),
+        };
+
+        let snapshot = snapshot_from_loaded_states(0, Some(&pc_state), Some(&ac_state), None, None, None);
+
+        assert_eq!(snapshot.ac.unit_of_measurement.as_deref(), Some("°F"));
     }
 
     #[test]

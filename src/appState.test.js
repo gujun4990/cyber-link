@@ -102,3 +102,42 @@ test('shouldIgnoreRevertedActionRefresh ignores stale reverted action refreshes'
     true,
   );
 });
+
+test('shouldIgnoreRevertedActionRefresh keeps refreshed ac metadata', () => {
+  const before = {
+    room: '核心-01',
+    pcId: '终端-05',
+    ac: {
+      isOn: true,
+      temp: 26,
+      minTemp: 16,
+      maxTemp: 30,
+      targetTempStep: 1,
+      temperatureUnit: '°C',
+      unitOfMeasurement: '°C',
+    },
+    ambientLightOn: false,
+    mainLightOn: false,
+    doorSignLightOn: false,
+    acAvailable: true,
+    ambientLightAvailable: false,
+    mainLightAvailable: false,
+    doorSignLightAvailable: false,
+    lightCount: 0,
+    connected: true,
+  };
+
+  const next = {
+    ...before,
+    ac: {
+      ...before.ac,
+      temp: 26,
+      maxTemp: 28,
+    },
+  };
+
+  assert.equal(
+    shouldIgnoreRevertedActionRefresh(before, next, { action: 'ac_set_temp', value: 26 }),
+    false,
+  );
+});

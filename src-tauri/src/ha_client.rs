@@ -1,5 +1,5 @@
 use crate::models::{AppConfig, HaEntityState, HaRequest};
-use crate::temperature::{normalize_temperature_for_celsius, normalize_temperature_for_entity};
+use crate::temperature::normalize_temperature_for_entity;
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -111,18 +111,6 @@ pub fn climate_set_temperature_request(config: &AppConfig, temperature: i32) -> 
 
 pub fn normalize_climate_temperature(state: &HaEntityState, requested: i32) -> f64 {
     normalize_temperature_for_entity(&state.attributes, requested)
-}
-
-pub async fn climate_temperature_targets(config: &AppConfig, requested: i32) -> Result<(i32, i32)> {
-    let entity_id = entity_id(config, true)?;
-    let current_state = fetch_ha_entity_state(config, entity_id).await?;
-
-    let request_temperature =
-        normalize_temperature_for_entity(&current_state.attributes, requested).round() as i32;
-    let confirm_temperature =
-        normalize_temperature_for_celsius(&current_state.attributes, requested);
-
-    Ok((request_temperature, confirm_temperature))
 }
 
 pub async fn fetch_ha_entity_state(config: &AppConfig, entity_id: &str) -> Result<HaEntityState> {
