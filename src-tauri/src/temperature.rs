@@ -1,5 +1,4 @@
-use crate::models::ACState;
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TemperatureUnit {
@@ -104,36 +103,6 @@ pub fn normalize_temperature_for_celsius(attributes: &Value, requested_celsius: 
     };
 
     round_one_decimal(celsius).round() as i32
-}
-
-pub fn normalize_temperature_for_ac_state(state: &ACState, requested_celsius: i32) -> (i32, i32) {
-    let attributes = ac_state_temperature_attributes(state);
-    let normalized = normalize_temperature_for_entity(&attributes, requested_celsius).round() as i32;
-    let confirmed = normalize_temperature_for_celsius(&attributes, requested_celsius);
-
-    (normalized, confirmed)
-}
-
-fn ac_state_temperature_attributes(state: &ACState) -> Value {
-    let mut attributes = Map::new();
-
-    if let Some(value) = state.min_temp {
-        attributes.insert("min_temp".into(), json!(value));
-    }
-    if let Some(value) = state.max_temp {
-        attributes.insert("max_temp".into(), json!(value));
-    }
-    if let Some(value) = state.target_temp_step {
-        attributes.insert("target_temp_step".into(), json!(value));
-    }
-    if let Some(value) = state.temperature_unit.as_ref() {
-        attributes.insert("temperature_unit".into(), json!(value));
-    }
-    if let Some(value) = state.unit_of_measurement.as_ref() {
-        attributes.insert("unit_of_measurement".into(), json!(value));
-    }
-
-    Value::Object(attributes)
 }
 
 fn celsius_to_fahrenheit(value: f64) -> f64 {

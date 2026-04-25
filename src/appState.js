@@ -13,9 +13,9 @@ export function shouldIgnoreRevertedActionRefresh(previous, next, action) {
 
   switch (action.action) {
     case 'ac_toggle':
-      return isSameAcSnapshot(previous.ac, next.ac);
+      return next.ac.isOn === previous.ac.isOn;
     case 'ac_set_temp':
-      return isSameAcSnapshot(previous.ac, next.ac);
+      return next.ac.isOn === previous.ac.isOn && next.ac.temp === previous.ac.temp;
     case 'switch_toggle':
       switch (action.target) {
         case 'ambientLight':
@@ -30,16 +30,4 @@ export function shouldIgnoreRevertedActionRefresh(previous, next, action) {
     default:
       return false;
   }
-}
-
-function isSameAcSnapshot(previous, next) {
-  return (
-    next.isOn === previous.isOn &&
-    next.temp === previous.temp &&
-    next.minTemp === previous.minTemp &&
-    next.maxTemp === previous.maxTemp &&
-    next.targetTempStep === previous.targetTempStep &&
-    next.temperatureUnit === previous.temperatureUnit &&
-    next.unitOfMeasurement === previous.unitOfMeasurement
-  );
 }

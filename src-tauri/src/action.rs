@@ -14,7 +14,6 @@ mod tests {
                 is_on: ac_on,
                 is_available: true,
                 temp: 16,
-                ..Default::default()
             },
             switch: SwitchState {
                 is_on: ambient_light_on,
@@ -302,6 +301,13 @@ mod tests {
         let addr = listener.local_addr().expect("listener addr");
 
         let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept normalize state");
+            respond_with_json(
+                socket,
+                r#"{"state":"cool","attributes":{"temperature":24,"min_temp":60,"max_temp":80,"target_temp_step":1,"temperature_unit":"F"}}"#,
+            )
+            .await;
+
             let (socket, _) = listener.accept().await.expect("accept post");
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
         });
@@ -317,17 +323,11 @@ mod tests {
             }),
         };
 
-        let mut snapshot = sample_snapshot(true, false);
-        snapshot.ac.min_temp = Some(60.0);
-        snapshot.ac.max_temp = Some(80.0);
-        snapshot.ac.target_temp_step = Some(1.0);
-        snapshot.ac.temperature_unit = Some("°F".into());
-
         let outcome = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             apply_action(
                 &config,
-                snapshot,
+                sample_snapshot(true, false),
                 ActionArgs {
                     action: ActionKind::AcSetTemp,
                     target: None,
@@ -352,6 +352,13 @@ mod tests {
         let addr = listener.local_addr().expect("listener addr");
 
         let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept normalize state");
+            respond_with_json(
+                socket,
+                r#"{"state":"cool","attributes":{"temperature":24,"min_temp":16,"max_temp":30,"target_temp_step":1,"temperature_unit":"°C"}}"#,
+            )
+            .await;
+
             let (socket, _) = listener.accept().await.expect("accept post");
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
         });
@@ -367,17 +374,11 @@ mod tests {
             }),
         };
 
-        let mut snapshot = sample_snapshot(true, false);
-        snapshot.ac.min_temp = Some(16.0);
-        snapshot.ac.max_temp = Some(30.0);
-        snapshot.ac.target_temp_step = Some(1.0);
-        snapshot.ac.temperature_unit = Some("°C".into());
-
         let outcome = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             apply_action(
                 &config,
-                snapshot,
+                sample_snapshot(true, false),
                 ActionArgs {
                     action: ActionKind::AcSetTemp,
                     target: None,
@@ -402,6 +403,13 @@ mod tests {
         let addr = listener.local_addr().expect("listener addr");
 
         let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept normalize state");
+            respond_with_json(
+                socket,
+                r#"{"state":"cool","attributes":{"temperature":24,"min_temp":16,"max_temp":30,"target_temp_step":1,"temperature_unit":"°C"}}"#,
+            )
+            .await;
+
             let (socket, _) = listener.accept().await.expect("accept post");
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             respond_with_json(socket, r#"{"state":"ok","attributes":{}}"#).await;
@@ -418,72 +426,11 @@ mod tests {
             }),
         };
 
-        let mut snapshot = sample_snapshot(true, false);
-        snapshot.ac.min_temp = Some(16.0);
-        snapshot.ac.max_temp = Some(30.0);
-        snapshot.ac.target_temp_step = Some(1.0);
-        snapshot.ac.temperature_unit = Some("°C".into());
-
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             apply_action(
                 &config,
-                snapshot,
-                ActionArgs {
-                    action: ActionKind::AcSetTemp,
-                    target: None,
-                    value: Some(26),
-                },
-            ),
-        )
-        .await
-        .expect("action should not time out")
-        .expect("action should succeed");
-
-        server.await.expect("server task");
-
-        assert!(outcome.error.is_none());
-        assert_eq!(outcome.snapshot.ac.temp, 26);
-    }
-
-    #[tokio::test]
-    async fn ac_set_temp_uses_cached_metadata_without_prequery() {
-        disable_proxy_env();
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("listener addr");
-
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.expect("accept set_temperature");
-            respond_with_request_assertion(
-                socket,
-                "/api/services/climate/set_temperature",
-                r#"{"state":"ok","attributes":{}}"#,
-            )
-            .await;
-        });
-
-        let config = AppConfig {
-            ha_url: format!("http://{addr}"),
-            token: "secret".into(),
-            pc_entity_id: None,
-            entity_id: Some(DeviceIds {
-                ac: Some("climate.office_ac".into()),
-                ambient_light: None,
-                ..Default::default()
-            }),
-        };
-
-        let mut snapshot = sample_snapshot(true, false);
-        snapshot.ac.min_temp = Some(16.0);
-        snapshot.ac.max_temp = Some(30.0);
-        snapshot.ac.target_temp_step = Some(1.0);
-        snapshot.ac.temperature_unit = Some("°C".into());
-
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            apply_action(
-                &config,
-                snapshot,
+                sample_snapshot(true, false),
                 ActionArgs {
                     action: ActionKind::AcSetTemp,
                     target: None,
@@ -887,13 +834,12 @@ use serde_json::json;
 use std::time::Duration;
 
 use crate::ha_client::{
-    climate_set_temperature_request, climate_turn_off_request, climate_turn_on_request,
-    entity_turn_off_request, entity_turn_on_request, fetch_ha_entity_state, send_ha_request,
-    send_ha_request_with_timeout,
+    climate_set_temperature_request, climate_temperature_targets, climate_turn_off_request,
+    climate_turn_on_request, entity_turn_off_request, entity_turn_on_request,
+    fetch_ha_entity_state, send_ha_request, send_ha_request_with_timeout,
 };
 use crate::models::{AppConfig, DeviceSnapshot, HaRequest};
 use crate::snapshot::snapshot_from_loaded_states;
-use crate::temperature::normalize_temperature_for_ac_state;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ActionArgs {
@@ -1160,7 +1106,7 @@ pub(crate) async fn apply_action(
             let original = snapshot.clone();
             let temp_celsius = args.value.ok_or_else(|| anyhow!("missing temperature"))?;
             let (normalized_temp, confirmed_temp) =
-                normalize_temperature_for_ac_state(&snapshot.ac, temp_celsius);
+                climate_temperature_targets(config, temp_celsius).await?;
             let request = climate_set_temperature_request(config, normalized_temp)?;
             let result = send_ha_request(config, request).await;
             if let Err(err) = result {
