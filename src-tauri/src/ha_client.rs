@@ -125,7 +125,7 @@ pub async fn fetch_ha_entity_state(config: &AppConfig, entity_id: &str) -> Resul
 }
 
 pub async fn send_ha_request(config: &AppConfig, request: HaRequest) -> Result<()> {
-    send_ha_request_with_timeout(config, request, Duration::from_secs(2)).await
+    send_ha_request_with_timeout(config, request, Duration::from_secs(10)).await
 }
 
 pub async fn send_ha_request_with_timeout(
@@ -155,6 +155,7 @@ fn temperature_json_value(temperature: f64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn sample_config() -> AppConfig {
         AppConfig {
@@ -177,5 +178,53 @@ mod tests {
 
         assert_eq!(request.url, "https://ha.example.local/api/services/switch/turn_on");
         assert_eq!(request.body, serde_json::json!({"entity_id": "switch.office_light"}));
+    }
+
+    #[tokio::test]
+    async fn send_ha_request_waits_long_enough_for_slow_home_assistant() {
+        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+        std::env::set_var("no_proxy", "127.0.0.1,localhost");
+        std::env::set_var("HTTP_PROXY", "");
+        std::env::set_var("HTTPS_PROXY", "");
+        std::env::set_var("http_proxy", "");
+        std::env::set_var("https_proxy", "");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut buf = vec![0u8; 4096];
+            let _ = socket.read(&mut buf).await.expect("read request");
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let body = r#"{"state":"ok","attributes":{}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+
+        let request = HaRequest {
+            url: format!("http://{addr}/api/services/climate/turn_on"),
+            body: serde_json::json!({"entity_id": "climate.office_ac"}),
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            send_ha_request(&sample_config(), request),
+        )
+        .await
+        .expect("request should not time out");
+
+        server.await.expect("server task");
+
+        assert!(result.is_ok());
     }
 }

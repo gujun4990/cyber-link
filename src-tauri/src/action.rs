@@ -502,6 +502,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ac_set_temp_uses_default_ha_timeout() {
+        disable_proxy_env();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept set_temperature");
+            respond_with_request_assertion(
+                socket,
+                "/api/services/climate/set_temperature",
+                r#"{"state":"ok","attributes":{}}"#,
+            )
+            .await;
+        });
+
+        let config = AppConfig {
+            ha_url: format!("http://{addr}"),
+            token: "secret".into(),
+            pc_entity_id: None,
+            entity_id: Some(DeviceIds {
+                ac: Some("climate.office_ac".into()),
+                ambient_light: None,
+                ..Default::default()
+            }),
+        };
+
+        let mut snapshot = sample_snapshot(true, false);
+        snapshot.ac.min_temp = Some(16.0);
+        snapshot.ac.max_temp = Some(30.0);
+        snapshot.ac.target_temp_step = Some(1.0);
+        snapshot.ac.temperature_unit = Some("°C".into());
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            apply_action(
+                &config,
+                snapshot,
+                ActionArgs {
+                    action: ActionKind::AcSetTemp,
+                    target: None,
+                    value: Some(26),
+                },
+            ),
+        )
+        .await
+        .expect("action should not time out")
+        .expect("action should succeed");
+
+        server.await.expect("server task");
+
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.snapshot.ac.temp, 26);
+    }
+
+    #[tokio::test]
     async fn startup_with_pc_entity_sends_only_pc_online() {
         disable_proxy_env();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
@@ -1107,7 +1162,7 @@ pub(crate) async fn apply_action(
             let (normalized_temp, confirmed_temp) =
                 normalize_temperature_for_ac_state(&snapshot.ac, temp_celsius);
             let request = climate_set_temperature_request(config, normalized_temp)?;
-            let result = send_ha_request_with_timeout(config, request, Duration::from_secs(10)).await;
+            let result = send_ha_request(config, request).await;
             if let Err(err) = result {
                 return Ok(ActionApplyOutcome {
                     snapshot: original,
